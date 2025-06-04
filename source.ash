@@ -37,9 +37,9 @@ fn pass_by_inout(pt: inout Point) -> unit {
 
 fn use_borrows() -> unit {
   let p4 = Point { x: 40, y: 40 };
-  pass_by_ref(&p4);    // Pass immutable reference
+  pass_by_ref(p4);    // Pass immutable reference
   print_int(p4.x);   // p4 still owned and usable
 
-  pass_by_inout(&mut p4); // Pass mutable reference
+  pass_by_inout(p4); // Pass mutable reference
   print_int(p4.x);   // p4 still owned, value might have changed
 }
