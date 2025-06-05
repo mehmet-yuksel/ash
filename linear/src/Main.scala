@@ -11,28 +11,36 @@ sealed trait Type {
   def withLoc(newLoc: SourceLocation): Type
 }
 case class IntType(loc: Option[SourceLocation] = None) extends Type {
-  override def withLoc(newLoc: SourceLocation): Type = this.copy(loc = Some(newLoc))
+  override def withLoc(newLoc: SourceLocation): Type =
+    this.copy(loc = Some(newLoc))
 }
 case class BoolType(loc: Option[SourceLocation] = None) extends Type {
-  override def withLoc(newLoc: SourceLocation): Type = this.copy(loc = Some(newLoc))
+  override def withLoc(newLoc: SourceLocation): Type =
+    this.copy(loc = Some(newLoc))
 }
 case class UnitType(loc: Option[SourceLocation] = None) extends Type {
-  override def withLoc(newLoc: SourceLocation): Type = this.copy(loc = Some(newLoc))
+  override def withLoc(newLoc: SourceLocation): Type =
+    this.copy(loc = Some(newLoc))
 }
-case class StructNameType(name: String, loc: Option[SourceLocation] = None) extends Type {
-  override def withLoc(newLoc: SourceLocation): Type = this.copy(loc = Some(newLoc))
+case class StructNameType(name: String, loc: Option[SourceLocation] = None)
+    extends Type {
+  override def withLoc(newLoc: SourceLocation): Type =
+    this.copy(loc = Some(newLoc))
 }
-
 
 // Parameter Passing Modes
 enum ParamMode:
-  case Move  // Pass by value, ownership moves (or copies for Copy types)
-  case Ref   // Immutable borrow
+  case Move // Pass by value, ownership moves (or copies for Copy types)
+  case Ref // Immutable borrow
   case Inout // Mutable borrow (exclusive borrow)
 
 // --- Definitions ---
 // Represents a struct definition: struct Point { x: int, y: int }
-case class StructDef(name: String, fields: List[(String, Type)], loc: SourceLocation)
+case class StructDef(
+    name: String,
+    fields: List[(String, Type)],
+    loc: SourceLocation
+)
 
 // Represents a function parameter: name: Type (mode)
 case class Param(name: String, typ: Type, mode: ParamMode, loc: SourceLocation)
@@ -49,7 +57,8 @@ case class FuncDef(
 // --- Statements ---
 sealed trait Statement { val loc: SourceLocation }
 // A block of statements: { stmt1; stmt2; }
-case class BlockStatement(statements: List[Statement], loc: SourceLocation) extends Statement
+case class BlockStatement(statements: List[Statement], loc: SourceLocation)
+    extends Statement
 
 // let varName: Type = init; (type annotation is optional)
 case class LetStatement(
@@ -60,14 +69,19 @@ case class LetStatement(
 ) extends Statement
 
 // For standalone expressions like function calls: foo();
-case class ExpressionStatement(expr: Expression, loc: SourceLocation) extends Statement
+case class ExpressionStatement(expr: Expression, loc: SourceLocation)
+    extends Statement
 
 // return expr; or return;
-case class ReturnStatement(expr: Option[Expression], loc: SourceLocation) extends Statement
+case class ReturnStatement(expr: Option[Expression], loc: SourceLocation)
+    extends Statement
 
 // Assignment: target.field = value or target = value (if target is mutable variable)
-case class AssignmentStatement(target: Expression, value: Expression, loc: SourceLocation) extends Statement
-
+case class AssignmentStatement(
+    target: Expression,
+    value: Expression,
+    loc: SourceLocation
+) extends Statement
 
 // --- Expressions ---
 sealed trait Expression { val loc: SourceLocation }
@@ -76,23 +90,36 @@ case class BoolLiteral(value: Boolean, loc: SourceLocation) extends Expression
 // Variable usage: x
 case class Variable(name: String, loc: SourceLocation) extends Expression
 // Struct instantiation: Point { x: 10, y: 20 }
-case class StructLiteral(typeName: String, values: List[(String, Expression)], loc: SourceLocation) extends Expression
+case class StructLiteral(
+    typeName: String,
+    values: List[(String, Expression)],
+    loc: SourceLocation
+) extends Expression
 // Field access: p.x
-case class FieldAccess(obj: Expression, fieldName: String, loc: SourceLocation) extends Expression
+case class FieldAccess(obj: Expression, fieldName: String, loc: SourceLocation)
+    extends Expression
 // Function call: foo(arg1, arg2)
-case class FunctionCall(funcName: Expression, args: List[Expression], loc: SourceLocation) extends Expression
+case class FunctionCall(
+    funcName: Expression,
+    args: List[Expression],
+    loc: SourceLocation
+) extends Expression
 
 // --- Program ---
 // A program is a collection of struct and function definitions
-case class Program(structs: List[StructDef], functions: List[FuncDef], loc: SourceLocation)
+case class Program(
+    structs: List[StructDef],
+    functions: List[FuncDef],
+    loc: SourceLocation
+)
 
 // --- Type Checking related (can stay as is for now) ---
 // Information about a variable in the current scope
 enum VarState:
-  case Owned          // Variable owns the value
-  case Moved          // Value has been moved from this variable
-  case BorrowedRead   // Immutably borrowed
-  case BorrowedWrite  // Mutably borrowed
+  case Owned // Variable owns the value
+  case Moved // Value has been moved from this variable
+  case BorrowedRead // Immutably borrowed
+  case BorrowedWrite // Mutably borrowed
 
 // Stores type and ownership state of a variable
 case class VarInfo(typ: Type, state: VarState, definitionLoc: SourceLocation)
@@ -104,27 +131,30 @@ case class GlobalContext(
 )
 
 type LocalContext = scala.collection.mutable.Map[String, VarInfo]
-case class TypeError(message: String, loc: Option[SourceLocation] = None) extends Exception(message)
+case class TypeError(message: String, loc: Option[SourceLocation] = None)
+    extends Exception(message)
 
 object Main {
   def main(args: Array[String]): Unit = {
-    val assignmentTestCode = """
-fn test_assign(p: ref Point) -> unit {
-    let p: Point = Point {x:0, y:0};
-    p.x = 10;
+    val testCode = """
+fn test_params(a: int, b: ref Point, c: inout bool) -> unit {
+    let x: int = 42;
 }
 """
-    println("\n--- Testing assignment parsing ---")
+    println("\n--- Testing parameter parsing ---")
     try {
-      val pointDef =
-        "struct Point { x: int, y: int }\n" // Need Point defined for this test
-      val languageParser = new LanguageParser(pointDef + assignmentTestCode)
+      val languageParser = new LanguageParser(testCode)
       val programAst = languageParser.parseProgram()
-      println("Successfully parsed assignment test!")
-      programAst.functions.find(_.name == "test_assign").foreach(println)
+      println("Successfully parsed all parameter types!")
+      programAst.functions.find(_.name == "test_params").foreach { func =>
+        println(s"Function: ${func.name}")
+        func.params.foreach { param =>
+          println(s"  ${param.name}: ${param.mode} ${param.typ}")
+        }
+      }
     } catch {
       case e: Exception =>
-        System.err.println(s"Error in assignment test: ${e.getMessage}")
+        System.err.println(s"Error in parameter test: ${e.getMessage}")
     }
 
   }
