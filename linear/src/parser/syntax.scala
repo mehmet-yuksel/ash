@@ -201,7 +201,7 @@ class LanguageParser(input: String) {
   }
 
   // --- Type Parsing ---
-  private def parseType(p: Parser[Expression]): Type = {
+  private def parseBaseType(p: Parser[Expression]): Type = {
     val typeToken = p.advance()
     typeToken.typ match {
       case "INT_TYPE"   => IntType(Some(typeToken.loc))
@@ -211,7 +211,7 @@ class LanguageParser(input: String) {
       case _ =>
         val preview = ErrorUtils.generateErrorPreview(input, typeToken.loc)
         throw new ParserError(
-          s"Expected a type name (int, bool, unit, or Identifier) but got '${typeToken.lexeme}' at line ${typeToken.loc.line}, column ${typeToken.loc.column}\n$preview"
+          s"Expected a base type name (int, bool, unit, or Identifier) but got '${typeToken.lexeme}' at line ${typeToken.loc.line}, column ${typeToken.loc.column}\n$preview"
         )
     }
   }
@@ -240,7 +240,7 @@ class LanguageParser(input: String) {
     val letToken = p.expect("LET")
     val varNameToken = p.expect("IDENTIFIER")
     val typeAnnotation = if (p.matchAndAdvance("COLON")) {
-      Some(parseType(p))
+      Some(parseBaseType(p))
     } else {
       None
     }
@@ -304,7 +304,7 @@ class LanguageParser(input: String) {
     while (p.peek().typ != "RBRACE" && p.peek().typ != "EOF") {
       val fieldNameToken = p.expect("IDENTIFIER")
       p.expect("COLON")
-      val fieldType = parseType(p)
+      val fieldType = parseBaseType(p)
       fields += ((fieldNameToken.lexeme, fieldType))
       if (p.peek().typ == "RBRACE") {
         // allow trailing comma if we wanted: p.matchAndAdvance("COMMA")
@@ -323,25 +323,40 @@ class LanguageParser(input: String) {
   }
 
   private def parseParam(p: Parser[Expression]): Param = {
-    val firstToken = p.peek()
-    val mode = firstToken.typ match {
-      case "REF"   => p.advance(); ParamMode.Ref
-      case "INOUT" => p.advance(); ParamMode.Inout
-      case _       => ParamMode.Move // Default is move
-    }
     val nameToken = p.expect("IDENTIFIER")
     p.expect("COLON")
-    val typeAst = parseType(p)
-    val paramLoc = mode match {
-      case ParamMode.Move => nameToken.loc // starts at name
-      case _              => firstToken.loc // starts at ref/inout keyword
+
+    val modePeekToken =
+      p.peek() // Peek at what might be 'ref', 'inout', or the base type
+
+    val mode = modePeekToken.typ match {
+      case "REF" =>
+        p.advance() // Consume 'ref'
+        ParamMode.Ref
+      case "INOUT" =>
+        p.advance() // Consume 'inout'
+        ParamMode.Inout
+      case _ =>
+        ParamMode.Move // No mode keyword, next token is the base type
     }
-    Param(
-      nameToken.lexeme,
-      typeAst,
-      mode,
-      paramLoc
-    ) // loc needs to span properly
+
+    val baseTypeAst = parseBaseType(p) // Call the renamed method
+
+    // Calculate the overall location for the Param AST node
+    // It should span from the nameToken to the end of the baseTypeAst
+    val paramStartLoc = nameToken.loc
+    val paramEndLoc = baseTypeAst.loc.getOrElse(
+      p.previous().loc
+    ) // Use baseType's loc, or last consumed token if baseType has no loc
+
+    val overallParamLoc = SourceLocation(
+      paramStartLoc.line,
+      paramStartLoc.column,
+      paramStartLoc.startPosition,
+      paramEndLoc.endPosition
+    )
+
+    Param(nameToken.lexeme, baseTypeAst, mode, overallParamLoc)
   }
 
   private def parseFuncDef(p: Parser[Expression]): FuncDef = {
@@ -357,7 +372,7 @@ class LanguageParser(input: String) {
     }
     p.expect("RPAREN")
     val returnType = if (p.matchAndAdvance("ARROW")) {
-      parseType(p)
+      parseBaseType(p)
     } else {
       UnitType(None) // Default return type is unit, loc can be None or inferred
     }
