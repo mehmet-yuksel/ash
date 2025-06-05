@@ -142,15 +142,19 @@ end {
             # Specify UTF8 encoding, common for code files
             $content = Get-Content -Path $fileInfo.FullName -Raw -Encoding UTF8 -ErrorAction Stop
 
-            # Output the formatted section
+            # Output the formatted section with markdown code fence
             "--- File: $relativePath ---"
+            "``````"
             $content
+            "``````"
             "" # Add a blank line for separation, optional
         }
         catch {
             Write-Warning "Could not read content of file '$($fileInfo.FullName)': $($_.Exception.Message)"
             "--- File: $relativePath ---"
+            "``````"
             "*** Error: Could not read file content. $($_.Exception.Message) ***"
+            "``````"
             ""
         }
     }
