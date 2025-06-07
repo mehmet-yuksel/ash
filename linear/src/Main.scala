@@ -27,6 +27,11 @@ case class StructNameType(name: String, loc: Option[SourceLocation] = None)
   override def withLoc(newLoc: SourceLocation): Type =
     this.copy(loc = Some(newLoc))
 }
+case class ManagedType(innerType: Type, loc: Option[SourceLocation] = None)
+    extends Type {
+  override def withLoc(newLoc: SourceLocation): Type =
+    this.copy(loc = Some(newLoc))
+}
 
 // Parameter Passing Modes
 enum ParamMode:
@@ -95,6 +100,12 @@ case class StructLiteral(
     values: List[(String, Expression)],
     loc: SourceLocation
 ) extends Expression
+// Managed struct instantiation: managed Point { x: 10, y: 20 }
+case class ManagedStructLiteral(
+    typeName: String,
+    values: List[(String, Expression)],
+    loc: SourceLocation
+) extends Expression
 // Field access: p.x
 case class FieldAccess(obj: Expression, fieldName: String, loc: SourceLocation)
     extends Expression
@@ -137,24 +148,65 @@ case class TypeError(message: String, loc: Option[SourceLocation] = None)
 object Main {
   def main(args: Array[String]): Unit = {
     val testCode = """
-fn test_params(a: int, b: ref Point, c: inout bool) -> unit {
-    let x: int = 42;
+struct Point {
+  x: int,
+  y: int
+}
+
+fn foo(p: Point) -> unit { }
+
+fn bar(p: managed Point) -> unit { }
+
+fn main() -> unit {
+  let p1 = Point { x: 1, y: 2 };
+  foo(p1);
+  print_int(p1.x);
+
+  let p2 = managed Point { x: 1, y: 2 };
+  bar(p2);
+  print_int(p2.x);
 }
 """
-    println("\n--- Testing parameter parsing ---")
+    println("\n--- Testing managed types parsing ---")
     try {
       val languageParser = new LanguageParser(testCode)
       val programAst = languageParser.parseProgram()
-      println("Successfully parsed all parameter types!")
-      programAst.functions.find(_.name == "test_params").foreach { func =>
+      println("Successfully parsed managed types!")
+      
+      // Show struct definitions
+      programAst.structs.foreach { struct =>
+        println(s"Struct: ${struct.name}")
+        struct.fields.foreach { case (name, typ) =>
+          println(s"  ${name}: ${typ}")
+        }
+      }
+      
+      // Show function definitions with parameter types
+      programAst.functions.foreach { func =>
         println(s"Function: ${func.name}")
         func.params.foreach { param =>
           println(s"  ${param.name}: ${param.mode} ${param.typ}")
         }
+        
+        // For main function, show the body statements
+        if (func.name == "main") {
+          println(s"  Body statements:")
+          func.body.statements.foreach { stmt =>
+            stmt match {
+              case LetStatement(varName, typeAnnotation, init, _) =>
+                println(s"    let ${varName}: ${typeAnnotation.getOrElse("inferred")} = ${init.getClass.getSimpleName}")
+              case ExpressionStatement(expr, _) =>
+                println(s"    ${expr.getClass.getSimpleName}")
+              case _ =>
+                println(s"    ${stmt.getClass.getSimpleName}")
+            }
+          }
+        }
       }
     } catch {
       case e: Exception =>
-        System.err.println(s"Error in parameter test: ${e.getMessage}")
+        System.err.println(s"Error in managed types test: ${e.getMessage}")
+        e.printStackTrace()
     }
 
   }

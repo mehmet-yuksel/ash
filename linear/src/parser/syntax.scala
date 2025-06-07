@@ -34,6 +34,7 @@ class LanguageParser(input: String) {
     .token("RETURN", "return\\b")
     .token("REF", "ref\\b")
     .token("INOUT", "inout\\b")
+    .token("MANAGED", "managed\\b")
     .token("INT_TYPE", "int\\b")
     .token("BOOL_TYPE", "bool\\b")
     .token("UNIT_TYPE", "unit\\b")
@@ -72,6 +73,7 @@ class LanguageParser(input: String) {
     .prefix("TRUE", parseBooleanLiteral)
     .prefix("FALSE", parseBooleanLiteral)
     .prefix("LPAREN", parseGroupedExpression)
+    .prefix("MANAGED", parseManagedExpression)
   // Prefix parselets for struct literals are handled by parseIdentifier
   // when it sees an IDENTIFIER followed by LBRACE
 
@@ -127,6 +129,23 @@ class LanguageParser(input: String) {
     expr // Location of grouped expr is implicitly covered by its content + parens
   }
 
+  private def parseManagedExpression(
+      p: Parser[Expression],
+      token: Token
+  ): Expression = {
+    // token is the "managed" keyword
+    // Next should be an IDENTIFIER followed by LBRACE for struct literal
+    val typeNameToken = p.expect("IDENTIFIER")
+    if (p.peek().typ == "LBRACE") {
+      parseManagedStructLiteral(p, token, typeNameToken)
+    } else {
+      val preview = ErrorUtils.generateErrorPreview(input, typeNameToken.loc)
+      throw new ParserError(
+        s"Expected struct literal after 'managed ${typeNameToken.lexeme}' but got '${p.peek().lexeme}' at line ${p.peek().loc.line}, column ${p.peek().loc.column}\n$preview"
+      )
+    }
+  }
+
   private def parseStructLiteral(
       p: Parser[Expression],
       typeNameToken: Token
@@ -155,6 +174,37 @@ class LanguageParser(input: String) {
       rBraceToken.loc.endPosition
     )
     StructLiteral(typeNameToken.lexeme, fields.toList, loc)
+  }
+
+  private def parseManagedStructLiteral(
+      p: Parser[Expression],
+      managedToken: Token,
+      typeNameToken: Token
+  ): Expression = {
+    p.expect("LBRACE") // Consume the opening brace
+    val fields = ListBuffer.empty[(String, Expression)]
+    val firstTokenLoc = managedToken.loc
+
+    if (p.peek().typ != "RBRACE") {
+      val fieldNameToken = p.expect("IDENTIFIER")
+      p.expect("COLON")
+      val value = p.parseExpression(Precedence.LOWEST)
+      fields += ((fieldNameToken.lexeme, value))
+      while (p.matchAndAdvance("COMMA") && p.peek().typ != "RBRACE") {
+        val fieldNameToken = p.expect("IDENTIFIER")
+        p.expect("COLON")
+        val value = p.parseExpression(Precedence.LOWEST)
+        fields += ((fieldNameToken.lexeme, value))
+      }
+    }
+    val rBraceToken = p.expect("RBRACE")
+    val loc = SourceLocation(
+      firstTokenLoc.line,
+      firstTokenLoc.column,
+      firstTokenLoc.startPosition,
+      rBraceToken.loc.endPosition
+    )
+    ManagedStructLiteral(typeNameToken.lexeme, fields.toList, loc)
   }
 
   private def parseFunctionCall(
@@ -201,6 +251,23 @@ class LanguageParser(input: String) {
   }
 
   // --- Type Parsing ---
+  private def parseType(p: Parser[Expression]): Type = {
+    if (p.peek().typ == "MANAGED") {
+      val managedToken = p.advance() // consume 'managed'
+      val innerType = parseBaseType(p)
+      val endLoc = innerType.loc.getOrElse(p.previous().loc)
+      val managedLoc = SourceLocation(
+        managedToken.loc.line,
+        managedToken.loc.column,
+        managedToken.loc.startPosition,
+        endLoc.endPosition
+      )
+      ManagedType(innerType, Some(managedLoc))
+    } else {
+      parseBaseType(p)
+    }
+  }
+
   private def parseBaseType(p: Parser[Expression]): Type = {
     val typeToken = p.advance()
     typeToken.typ match {
@@ -240,7 +307,7 @@ class LanguageParser(input: String) {
     val letToken = p.expect("LET")
     val varNameToken = p.expect("IDENTIFIER")
     val typeAnnotation = if (p.matchAndAdvance("COLON")) {
-      Some(parseBaseType(p))
+      Some(parseType(p))
     } else {
       None
     }
@@ -304,7 +371,7 @@ class LanguageParser(input: String) {
     while (p.peek().typ != "RBRACE" && p.peek().typ != "EOF") {
       val fieldNameToken = p.expect("IDENTIFIER")
       p.expect("COLON")
-      val fieldType = parseBaseType(p)
+      val fieldType = parseType(p)
       fields += ((fieldNameToken.lexeme, fieldType))
       if (p.peek().typ == "RBRACE") {
         // allow trailing comma if we wanted: p.matchAndAdvance("COMMA")
@@ -340,7 +407,7 @@ class LanguageParser(input: String) {
         ParamMode.Move // No mode keyword, next token is the base type
     }
 
-    val baseTypeAst = parseBaseType(p) // Call the renamed method
+    val baseTypeAst = parseType(p) // Parse type (potentially with managed prefix)
 
     // Calculate the overall location for the Param AST node
     // It should span from the nameToken to the end of the baseTypeAst
@@ -372,7 +439,7 @@ class LanguageParser(input: String) {
     }
     p.expect("RPAREN")
     val returnType = if (p.matchAndAdvance("ARROW")) {
-      parseBaseType(p)
+      parseType(p)
     } else {
       UnitType(None) // Default return type is unit, loc can be None or inferred
     }
