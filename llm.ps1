@@ -46,6 +46,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
+    [Alias('InputPath')]
     [string[]]$Path,
 
     [Parameter(Mandatory = $false)]
@@ -53,42 +54,20 @@ param(
 )
 
 begin {
-    $resolvedRootPath = ""
+    # Initialize lists to collect inputs during the 'process' phase.
+    # This is crucial for handling pipeline input correctly.
+    $allInputPaths = [System.Collections.Generic.List[string]]::new()
     $filesToProcess = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
-
-    Write-Verbose "Input Paths: $($Path -join ', ')"
-    Write-Verbose "Specified RootPath: $RootPath"
-
-    # Determine the root path for relative path calculations
-    if (-not [string]::IsNullOrWhiteSpace($RootPath)) {
-        try {
-            $resolvedRootPath = (Resolve-Path -Path $RootPath -ErrorAction Stop).ProviderPath
-            if (-not (Test-Path -Path $resolvedRootPath -PathType Container)) {
-                Write-Error "Specified RootPath '$RootPath' is not a valid directory."
-                exit 1 # Exit if explicit root is bad
-            }
-        }
-        catch {
-            Write-Error "Could not resolve specified RootPath '$RootPath': $($_.Exception.Message)"
-            exit 1
-        }
-    } elseif ($Path.Count -eq 1 -and (Test-Path -Path $Path[0] -PathType Container)) {
-        # If a single directory is provided as input, use it as the root
-        $resolvedRootPath = (Resolve-Path -Path $Path[0]).ProviderPath
-    } else {
-        # Default to current working directory if no specific root is given or multiple/file inputs
-        $resolvedRootPath = (Get-Location).Path
-    }
-
-    # Ensure root path ends with a directory separator for consistent relative path calculation
-    if (-not ($resolvedRootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar))) {
-        $resolvedRootPath += [System.IO.Path]::DirectorySeparatorChar
-    }
-    Write-Verbose "Using effective root path for relative paths: $resolvedRootPath"
+    Write-Verbose "Initialization complete. Awaiting input..."
 }
 
 process {
+    # This block runs for each item from the pipeline or the -Path parameter.
+    # We collect all file objects and the original input paths.
+    $allInputPaths.AddRange($Path)
+
     foreach ($itemPath in $Path) {
+        Write-Verbose "Processing input path: $itemPath"
         try {
             $resolvedItem = Resolve-Path -Path $itemPath -ErrorAction SilentlyContinue
             if (-not $resolvedItem) {
@@ -98,15 +77,17 @@ process {
 
             if (Test-Path -Path $resolvedItem.ProviderPath -PathType Container) {
                 # It's a directory, get all files recursively
-                Write-Verbose "Processing directory: $($resolvedItem.ProviderPath)"
+                Write-Verbose "Expanding directory: $($resolvedItem.ProviderPath)"
                 Get-ChildItem -Path $resolvedItem.ProviderPath -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
                     $filesToProcess.Add($_)
                 }
-            } elseif (Test-Path -Path $resolvedItem.ProviderPath -PathType Leaf) {
+            }
+            elseif (Test-Path -Path $resolvedItem.ProviderPath -PathType Leaf) {
                 # It's a file
-                Write-Verbose "Adding file: $($resolvedItem.ProviderPath)"
+                Write-Verbose "Queueing file: $($resolvedItem.ProviderPath)"
                 $filesToProcess.Add((Get-Item -Path $resolvedItem.ProviderPath))
-            } else {
+            }
+            else {
                 Write-Warning "Path '$($resolvedItem.ProviderPath)' is neither a file nor a directory, or is inaccessible."
             }
         }
@@ -117,24 +98,65 @@ process {
 }
 
 end {
+    Write-Verbose "All input processed. Finalizing context..."
+
     if ($filesToProcess.Count -eq 0) {
         Write-Warning "No files found to process."
         return
     }
 
-    # Deduplicate files in case of overlapping inputs
+    # Deduplicate files in case of overlapping inputs (e.g., providing a folder and a file within it)
     $uniqueFiles = $filesToProcess | Sort-Object -Property FullName -Unique
-
     Write-Verbose "Total unique files to process: $($uniqueFiles.Count)"
 
+
+    # --- Determine the root path for relative path calculations ---
+    # This logic is now in the 'end' block to work correctly with pipeline input.
+    $resolvedRootPath = ""
+    Write-Verbose "Determining effective root path..."
+    Write-Verbose "User-specified RootPath: $RootPath"
+    Write-Verbose "Total unique input paths received: $($allInputPaths.Count)"
+
+    if (-not [string]::IsNullOrWhiteSpace($RootPath)) {
+        try {
+            $resolvedRootPath = (Resolve-Path -Path $RootPath -ErrorAction Stop).ProviderPath
+            if (-not (Test-Path -Path $resolvedRootPath -PathType Container)) {
+                Write-Error "Specified RootPath '$RootPath' is not a valid directory."
+                return # Use return instead of exit
+            }
+        }
+        catch {
+            Write-Error "Could not resolve specified RootPath '$RootPath': $($_.Exception.Message)"
+            return
+        }
+    }
+    elseif ($allInputPaths.Count -eq 1 -and (Test-Path -Path $allInputPaths[0] -PathType Container)) {
+        # If a single directory was provided as input, use it as the root
+        $resolvedRootPath = (Resolve-Path -Path $allInputPaths[0]).ProviderPath
+        Write-Verbose "Inferred root path from single directory input: $resolvedRootPath"
+    }
+    else {
+        # Default to current working directory for multiple/file inputs or if no specific root is given
+        $resolvedRootPath = (Get-Location).Path
+        Write-Verbose "Defaulting to current working directory as root path: $resolvedRootPath"
+    }
+
+    # Ensure root path ends with a directory separator for consistent relative path calculation
+    if (-not ($resolvedRootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar))) {
+        $resolvedRootPath += [System.IO.Path]::DirectorySeparatorChar
+    }
+    Write-Verbose "Using effective root path for relative paths: $resolvedRootPath"
+
+
+    # --- Generate the final output string ---
     foreach ($fileInfo in $uniqueFiles) {
+        # Calculate relative path based on the determined root
         $relativePath = $fileInfo.FullName
         if ($relativePath.StartsWith($resolvedRootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
             $relativePath = $relativePath.Substring($resolvedRootPath.Length)
         }
         # Normalize directory separators for display
         $relativePath = $relativePath.Replace([System.IO.Path]::DirectorySeparatorChar, '/')
-
 
         try {
             Write-Verbose "Reading file: $($fileInfo.FullName) (Relative: $relativePath)"
@@ -147,10 +169,11 @@ end {
             "``````"
             $content
             "``````"
-            "" # Add a blank line for separation, optional
+            "" # Add a blank line for separation
         }
         catch {
             Write-Warning "Could not read content of file '$($fileInfo.FullName)': $($_.Exception.Message)"
+            # Output an error message within the context for the specific file
             "--- File: $relativePath ---"
             "``````"
             "*** Error: Could not read file content. $($_.Exception.Message) ***"
