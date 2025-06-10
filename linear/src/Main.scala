@@ -7,6 +7,8 @@ import parser.{
   LexerError,
   LanguageParser
 }
+import linear.typechecker.Typechecker
+import linear.typechecker.TypeError
 
 object Main {
   def main(args: Array[String]): Unit = {
@@ -16,75 +18,62 @@ struct Point {
   y: int
 }
 
-resource File {
-  fd: int,
-  path: int
+fn main() -> unit {
+  let p1: Point = Point { x: 10, y: 20 };
+  let p2: Point = p1; // p1 is moved to p2
+
+  // Assuming a built-in print_int that takes int by value (copy)
+  print_int(p2.x); // OK
+
+  // print_int(p1.x); // ERROR: p1 used after move
 }
 
-fn foo(p: Point) -> unit { }
+fn pass_by_move(pt: Point) -> unit {
+  print_int(pt.x);
+}
 
-fn bar(p: managed Point) -> unit { }
+fn use_pass_by_move() -> unit {
+  let p3 = Point { x: 30, y: 30 };
+  pass_by_move(p3); // p3 is moved into pass_by_move
+  // print_int(p3.x); // ERROR: p3 used after move
+}
 
-fn main() -> unit {
-  let p1 = Point { x: 1, y: 2 };
-  foo(p1);
-  print_int(p1.x);
+fn pass_by_ref(pt: ref Point) -> unit {
+  print_int(pt.x); // OK to read
+  // pt.x = 100; // ERROR: cannot modify through immutable ref
+}
 
-  let p2 = managed Point { x: 1, y: 2 };
-  bar(p2);
-  print_int(p2.x);
+fn pass_by_inout(pt: inout Point) -> unit {
+  print_int(pt.x);
+  pt.x = 42; // OK to modify
+}
+
+fn use_borrows() -> unit {
+  let p4 = Point { x: 40, y: 40 };
+  pass_by_ref(p4);    // Pass immutable reference
+  print_int(p4.x);   // p4 still owned and usable
+
+  pass_by_inout(p4); // Pass mutable reference
+  print_int(p4.x);   // p4 still owned, value might have changed
+}
+
+fn print_int(x: int) -> unit {
+  // Placeholder for print function
 }
 """
-    println("\n--- Testing managed types parsing ---")
     try {
       val languageParser = new LanguageParser(testCode)
       val programAst = languageParser.parseProgram()
       println("Successfully parsed managed types!")
-
-      // Show struct definitions
-      programAst.structs.foreach { struct =>
-        println(s"Struct: ${struct.name}")
-        struct.fields.foreach { case (name, typ) =>
-          println(s"  ${name}: ${typ}")
-        }
-      }
-
-      // Show resource definitions
-      programAst.resources.foreach { resource =>
-        println(s"Resource: ${resource.name}")
-        resource.fields.foreach { case (name, typ) =>
-          println(s"  ${name}: ${typ}")
-        }
-      }
-
-      // Show function definitions with parameter types
-      programAst.functions.foreach { func =>
-        println(s"Function: ${func.name}")
-        func.params.foreach { param =>
-          println(s"  ${param.name}: ${param.mode} ${param.typ}")
-        }
-
-        // For main function, show the body statements
-        if (func.name == "main") {
-          println(s"  Body statements:")
-          func.body.statements.foreach { stmt =>
-            stmt match {
-              case LetStatement(varName, typeAnnotation, init, _) =>
-                println(s"    let ${varName}: ${typeAnnotation
-                    .getOrElse("inferred")} = ${init.getClass.getSimpleName}")
-              case ExpressionStatement(expr, _) =>
-                println(s"    ${expr.getClass.getSimpleName}")
-              case _ =>
-                println(s"    ${stmt.getClass.getSimpleName}")
-            }
-          }
-        }
-      }
+      val typechecker = new Typechecker(programAst)
+      typechecker.check()
     } catch {
-      case e: Exception =>
-        System.err.println(s"Error in managed types test: ${e.getMessage}")
-        e.printStackTrace()
+      case e: LexerError =>
+        println(s"Lexer error: ${e.getMessage}")
+      case e: ParserError =>
+        println(s"Parser error: ${e.getMessage}")
+      case e: TypeError =>
+        println(s"Type error: ${e.getMessage}")
     }
-
   }
 }

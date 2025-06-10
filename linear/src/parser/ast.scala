@@ -128,25 +128,3 @@ case class Program(
     functions: List[FuncDef],
     loc: SourceLocation
 )
-
-// --- Type Checking related (can stay as is for now) ---
-// Information about a variable in the current scope
-enum VarState:
-  case Owned // Variable owns the value
-  case Moved // Value has been moved from this variable
-  case BorrowedRead // Immutably borrowed
-  case BorrowedWrite // Mutably borrowed
-
-// Stores type and ownership state of a variable
-case class VarInfo(typ: Type, state: VarState, definitionLoc: SourceLocation)
-
-// Context for type checking
-case class GlobalContext(
-    structs: Map[String, StructDef] = Map.empty,
-    resources: Map[String, ResourceDef] = Map.empty,
-    functions: Map[String, FuncDef] = Map.empty
-)
-
-type LocalContext = scala.collection.mutable.Map[String, VarInfo]
-case class TypeError(message: String, loc: Option[SourceLocation] = None)
-    extends Exception(message)
