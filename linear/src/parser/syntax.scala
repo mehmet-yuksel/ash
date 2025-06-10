@@ -142,7 +142,9 @@ class LanguageParser(input: String) {
     } else {
       val preview = ErrorUtils.generateErrorPreview(input, typeNameToken.loc)
       throw new ParserError(
-        s"Expected struct literal after 'managed ${typeNameToken.lexeme}' but got '${p.peek().lexeme}' at line ${p.peek().loc.line}, column ${p.peek().loc.column}\n$preview"
+        s"Expected struct literal after 'managed ${typeNameToken.lexeme}' but got '${p
+            .peek()
+            .lexeme}' at line ${p.peek().loc.line}, column ${p.peek().loc.column}\n$preview"
       )
     }
   }
@@ -434,7 +436,9 @@ class LanguageParser(input: String) {
         ParamMode.Move // No mode keyword, next token is the base type
     }
 
-    val baseTypeAst = parseType(p) // Parse type (potentially with managed prefix)
+    val baseTypeAst = parseType(
+      p
+    ) // Parse type (potentially with managed prefix)
 
     // Calculate the overall location for the Param AST node
     // It should span from the nameToken to the end of the baseTypeAst
