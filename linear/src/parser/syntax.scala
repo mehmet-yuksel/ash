@@ -29,6 +29,7 @@ class LanguageParser(input: String) {
 
     // Keywords
     .token("STRUCT", "struct\\b")
+    .token("RESOURCE", "resource\\b")
     .token("FN", "fn\\b")
     .token("LET", "let\\b")
     .token("RETURN", "return\\b")
@@ -362,7 +363,7 @@ class LanguageParser(input: String) {
     BlockStatement(statements.toList, loc)
   }
 
-  // --- Top-Level Parsing (Program, Structs, Functions) ---
+  // --- Top-Level Parsing (Program, Structs, Resources, Functions) ---
   private def parseStructDef(p: Parser[Expression]): StructDef = {
     val structToken = p.expect("STRUCT")
     val nameToken = p.expect("IDENTIFIER")
@@ -387,6 +388,32 @@ class LanguageParser(input: String) {
       rBraceToken.loc.endPosition
     )
     StructDef(nameToken.lexeme, fields.toList, loc)
+  }
+
+  private def parseResourceDef(p: Parser[Expression]): ResourceDef = {
+    val resourceToken = p.expect("RESOURCE")
+    val nameToken = p.expect("IDENTIFIER")
+    p.expect("LBRACE")
+    val fields = ListBuffer.empty[(String, Type)]
+    while (p.peek().typ != "RBRACE" && p.peek().typ != "EOF") {
+      val fieldNameToken = p.expect("IDENTIFIER")
+      p.expect("COLON")
+      val fieldType = parseType(p)
+      fields += ((fieldNameToken.lexeme, fieldType))
+      if (p.peek().typ == "RBRACE") {
+        // allow trailing comma if we wanted: p.matchAndAdvance("COMMA")
+      } else {
+        p.expect("COMMA") // Require comma if not the last field before RBRACE
+      }
+    }
+    val rBraceToken = p.expect("RBRACE")
+    val loc = SourceLocation(
+      resourceToken.loc.line,
+      resourceToken.loc.column,
+      resourceToken.loc.startPosition,
+      rBraceToken.loc.endPosition
+    )
+    ResourceDef(nameToken.lexeme, fields.toList, loc)
   }
 
   private def parseParam(p: Parser[Expression]): Param = {
@@ -455,18 +482,20 @@ class LanguageParser(input: String) {
 
   def parseProgram(): Program = {
     val structs = ListBuffer.empty[StructDef]
+    val resources = ListBuffer.empty[ResourceDef]
     val functions = ListBuffer.empty[FuncDef]
     val startLoc = parser.peek().loc // Location of the first token
 
     while (parser.peek().typ != "EOF") {
       parser.peek().typ match {
-        case "STRUCT" => structs += parseStructDef(parser)
-        case "FN"     => functions += parseFuncDef(parser)
+        case "STRUCT"   => structs += parseStructDef(parser)
+        case "RESOURCE" => resources += parseResourceDef(parser)
+        case "FN"       => functions += parseFuncDef(parser)
         case other =>
           val token = parser.peek()
           val preview = ErrorUtils.generateErrorPreview(input, token.loc)
           throw new ParserError(
-            s"Expected 'struct' or 'fn' definition at top level, but got '${token.lexeme}' (type: ${token.typ}) at line ${token.loc.line}, column ${token.loc.column}\n$preview"
+            s"Expected 'struct', 'resource', or 'fn' definition at top level, but got '${token.lexeme}' (type: ${token.typ}) at line ${token.loc.line}, column ${token.loc.column}\n$preview"
           )
       }
     }
@@ -480,6 +509,6 @@ class LanguageParser(input: String) {
       startLoc.startPosition,
       endLoc.endPosition
     )
-    Program(structs.toList, functions.toList, programLoc)
+    Program(structs.toList, resources.toList, functions.toList, programLoc)
   }
 }

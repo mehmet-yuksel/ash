@@ -47,6 +47,13 @@ case class StructDef(
     loc: SourceLocation
 )
 
+// Represents a resource definition: resource File { fd: int }
+case class ResourceDef(
+    name: String,
+    fields: List[(String, Type)],
+    loc: SourceLocation
+)
+
 // Represents a function parameter: name: Type (mode)
 case class Param(name: String, typ: Type, mode: ParamMode, loc: SourceLocation)
 
@@ -117,9 +124,10 @@ case class FunctionCall(
 ) extends Expression
 
 // --- Program ---
-// A program is a collection of struct and function definitions
+// A program is a collection of struct, resource and function definitions
 case class Program(
     structs: List[StructDef],
+    resources: List[ResourceDef],
     functions: List[FuncDef],
     loc: SourceLocation
 )
@@ -138,6 +146,7 @@ case class VarInfo(typ: Type, state: VarState, definitionLoc: SourceLocation)
 // Context for type checking
 case class GlobalContext(
     structs: Map[String, StructDef] = Map.empty,
+    resources: Map[String, ResourceDef] = Map.empty,
     functions: Map[String, FuncDef] = Map.empty
 )
 
@@ -151,6 +160,11 @@ object Main {
 struct Point {
   x: int,
   y: int
+}
+
+resource File {
+  fd: int,
+  path: int
 }
 
 fn foo(p: Point) -> unit { }
@@ -177,6 +191,14 @@ fn main() -> unit {
       programAst.structs.foreach { struct =>
         println(s"Struct: ${struct.name}")
         struct.fields.foreach { case (name, typ) =>
+          println(s"  ${name}: ${typ}")
+        }
+      }
+      
+      // Show resource definitions
+      programAst.resources.foreach { resource =>
+        println(s"Resource: ${resource.name}")
+        resource.fields.foreach { case (name, typ) =>
           println(s"  ${name}: ${typ}")
         }
       }
