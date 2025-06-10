@@ -50,7 +50,7 @@ param(
     [string[]]$Path,
 
     [Parameter(Mandatory = $false)]
-    [string]$RootPath
+    [string]$RootPath = $PWD
 )
 
 begin {
