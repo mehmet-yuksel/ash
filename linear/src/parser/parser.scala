@@ -20,16 +20,30 @@ case class Token(
 // --- Error Handling ---
 object ErrorUtils {
   def generateErrorPreview(input: String, loc: SourceLocation): String = {
-    val lines = input.split("\n")
+    // Handle different line ending styles and ensure consistent splitting
+    val normalizedInput = input.replace("\r\n", "\n").replace("\r", "\n")
+    val lines = normalizedInput.split("\n", -1) // -1 to keep empty trailing strings
+    
     // Adjust for 0-indexed lines array vs 1-indexed loc.line
-    val errorLine =
-      if (loc.line > 0 && loc.line <= lines.length) lines(loc.line - 1) else ""
+    val errorLine = if (loc.line > 0 && loc.line <= lines.length) {
+      lines(loc.line - 1)
+    } else {
+      s"<line ${loc.line} out of range: only ${lines.length} lines available>"
+    }
+    
     // Adjust for 0-indexed repeat vs 1-indexed loc.column
-    val caretLine = " " * (loc.column - 1).max(0) + "^"
+    // Ensure we don't go negative and handle cases where column is beyond line length
+    val column = (loc.column - 1).max(0)
+    val caretLine = " " * column.min(errorLine.length) + "^"
+    
+    // Show line number in the preview for better context
+    val lineNumber = f"${loc.line}%3d: "
+    val paddingSpaces = " " * lineNumber.length
+    
     s"""
 Error at line ${loc.line}, column ${loc.column}:
-$errorLine
-$caretLine"""
+$lineNumber$errorLine
+$paddingSpaces$caretLine"""
   }
 }
 
