@@ -92,13 +92,13 @@ class Typechecker(program: Program) {
     // Populate context with function parameters
     func.params.foreach { param =>
       validateType(param.typ)
-      val isMutable = param.mode match {
-        case ParamMode.Move(mutable) => mutable
-        case ParamMode.Inout         => true
-        case ParamMode.Ref           => false
+      val (isMutable, initialState) = param.mode match {
+        case ParamMode.Move(mutable) => (mutable, VarState.Owned)
+        case ParamMode.Inout         => (true, VarState.BorrowedWrite)
+        case ParamMode.Ref           => (false, VarState.BorrowedRead)
       }
       localContext(param.name) =
-        VarInfo(param.typ, VarState.Owned, isMutable, param.loc)
+        VarInfo(param.typ, initialState, isMutable, param.loc)
     }
 
     // Check the function body, providing the expected return type
