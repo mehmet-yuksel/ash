@@ -1,6 +1,8 @@
 package linear.typechecker
 
 import linear.parser._
+import linear.typechecker.typed._
+
 import scala.collection.mutable
 
 enum VarState:
@@ -69,7 +71,7 @@ class Typechecker(program: Program) {
   }
 
   /** Public entry point to start the type checking process. */
-  def check(): Unit = {
+  def check(): TypedProgram = {
     val mainFunc = globalContext.functions.getOrElse(
       "main",
       throw TypeError("No 'main' function found in the program.")
@@ -81,12 +83,19 @@ class Typechecker(program: Program) {
       )
     }
 
-    // Check all function bodies
-    program.functions.foreach(checkFunction)
+    // Check all function bodies and collect the typed versions
+    val typedFunctions = program.functions.map(checkFunction)
+
+    TypedProgram(
+      program.structs,
+      program.resources,
+      typedFunctions,
+      program.loc
+    )
   }
 
   /** Checks a single function definition. */
-  private def checkFunction(func: FuncDef): Unit = {
+  private def checkFunction(func: FuncDef): TypedFuncDef = {
     val localContext: LocalContext = mutable.Map.empty
 
     // Populate context with function parameters
@@ -102,7 +111,16 @@ class Typechecker(program: Program) {
     }
 
     // Check the function body, providing the expected return type
-    checkStatement(func.body, localContext, Some(func.returnType))
+    val typedBody =
+      checkStatement(func.body, localContext, Some(func.returnType)) match {
+        case tb: TypedBlockStatement => tb
+        case other =>
+          throw new IllegalStateException(
+            s"Function body must be a block, but got ${other.getClass}"
+          )
+      }
+
+    TypedFuncDef(func.name, func.params, func.returnType, typedBody, func.loc)
   }
 
   /** Recursively checks a statement. */
@@ -110,13 +128,13 @@ class Typechecker(program: Program) {
       stmt: Statement,
       context: LocalContext,
       expectedReturnType: Option[Type]
-  ): Unit = stmt match {
-    case BlockStatement(statements, _) =>
+  ): TypedStatement = stmt match {
+    case BlockStatement(statements, loc) =>
       // Each block gets a copy of the context to handle shadowing and scope.
       val blockContext = context.clone()
-      statements.foreach(s =>
-        checkStatement(s, blockContext, expectedReturnType)
-      )
+      val typedStatements =
+        statements.map(s => checkStatement(s, blockContext, expectedReturnType))
+      TypedBlockStatement(typedStatements, loc)
 
     case LetStatement(varName, isMutable, typeAnnotation, init, loc) =>
       if (context.contains(varName)) {
@@ -125,19 +143,19 @@ class Typechecker(program: Program) {
           Some(loc)
         )
       }
-      val initType = checkExpression(init, context)
+      val typedInit = checkExpression(init, context)
 
       typeAnnotation.foreach { declaredType =>
         validateType(declaredType)
-        if (!areTypesEqual(declaredType, initType)) {
+        if (!areTypesEqual(declaredType, typedInit.typ)) {
           throw TypeError(
-            s"Type mismatch for '$varName'. Expected ${typeToString(declaredType)} but got ${typeToString(initType)}.",
+            s"Type mismatch for '$varName'. Expected ${typeToString(declaredType)} but got ${typeToString(typedInit.typ)}.",
             Some(init.loc)
           )
         }
       }
 
-      val finalType = typeAnnotation.getOrElse(initType)
+      val finalType = typeAnnotation.getOrElse(typedInit.typ)
 
       // Move the value from the initializer if it's not a copy type
       if (!isCopyType(finalType)) {
@@ -146,34 +164,35 @@ class Typechecker(program: Program) {
 
       // Add the new variable to the context with mutability from the AST
       context(varName) = VarInfo(finalType, VarState.Owned, isMutable, loc)
+      TypedLetStatement(varName, isMutable, typedInit, loc)
 
-    case ExpressionStatement(expr, _) =>
-      checkExpression(
-        expr,
-        context
-      ) // Result is discarded, but ownership effects are applied.
+    case ExpressionStatement(expr, loc) =>
+      val typedExpr = checkExpression(expr, context)
+      TypedExpressionStatement(typedExpr, loc)
 
     case AssignmentStatement(target, value, loc) =>
-      // Check that the target is a valid, mutable place
-      val targetType =
+      val typedValue = checkExpression(value, context)
+      // Pass the typed value to checkPlaceExpression to avoid re-checking
+      val typedTarget =
         checkPlaceExpression(target, context, requireMutable = true)
-      val valueType = checkExpression(value, context)
 
-      if (!areTypesEqual(targetType, valueType)) {
+      if (!areTypesEqual(typedTarget.typ, typedValue.typ)) {
         throw TypeError(
-          s"Cannot assign value of type ${typeToString(valueType)} to target of type ${typeToString(targetType)}.",
+          s"Cannot assign value of type ${typeToString(typedValue.typ)} to target of type ${typeToString(typedTarget.typ)}.",
           Some(value.loc)
         )
       }
 
       // Move the value if it's not a copy type
-      if (!isCopyType(valueType)) {
+      if (!isCopyType(typedValue.typ)) {
         handleMove(value, context)
       }
+      TypedAssignmentStatement(typedTarget, typedValue, loc)
 
     case ReturnStatement(exprOpt, loc) =>
+      val typedExprOpt = exprOpt.map(checkExpression(_, context))
       val returnType =
-        exprOpt.map(checkExpression(_, context)).getOrElse(UnitType())
+        typedExprOpt.map(_.typ).getOrElse(UnitType())
       val expected = expectedReturnType.getOrElse(
         throw TypeError(
           "Return statement used outside of a function.",
@@ -193,15 +212,16 @@ class Typechecker(program: Program) {
           handleMove(expr, context)
         }
       }
+      TypedReturnStatement(typedExprOpt, loc)
   }
 
-  /** Recursively checks an expression and returns its type. */
+  /** Recursively checks an expression and returns its typed version. */
   private def checkExpression(
       expr: Expression,
       context: LocalContext
-  ): Type = expr match {
-    case IntLiteral(_, _)  => IntType()
-    case BoolLiteral(_, _) => BoolType()
+  ): TypedExpression = expr match {
+    case IntLiteral(v, loc)  => TypedIntLiteral(v, IntType(), loc)
+    case BoolLiteral(v, loc) => TypedBoolLiteral(v, BoolType(), loc)
 
     case Variable(name, loc) =>
       val varInfo = context.getOrElse(
@@ -211,21 +231,28 @@ class Typechecker(program: Program) {
       varInfo.state match {
         case VarState.Moved =>
           throw TypeError(s"Use of moved value '$name'.", Some(loc))
-        case _ =>
-          varInfo.typ // OK to read from Owned, BorrowedRead, BorrowedWrite
+        case _ => // OK to read from Owned, BorrowedRead, BorrowedWrite
+          TypedVariable(name, varInfo.typ, loc)
       }
 
     case StructLiteral(typeName, values, loc) =>
-      checkStructLiteral(typeName, values, context, loc)
-      StructNameType(typeName)
+      val (typedValues, structType) =
+        checkStructLiteral(typeName, values, context, loc)
+      TypedStructLiteral(typeName, typedValues, structType, loc)
 
     case ManagedStructLiteral(typeName, values, loc) =>
-      checkStructLiteral(typeName, values, context, loc)
-      ManagedType(StructNameType(typeName))
+      val (typedValues, structType) =
+        checkStructLiteral(typeName, values, context, loc)
+      TypedManagedStructLiteral(
+        typeName,
+        typedValues,
+        ManagedType(structType),
+        loc
+      )
 
     case FieldAccess(obj, fieldName, loc) =>
-      val objType = checkExpression(obj, context)
-      objType match {
+      val typedObj = checkExpression(obj, context)
+      val fieldType = typedObj.typ match {
         case StructNameType(structName, _) =>
           val structDef = globalContext.structs.getOrElse(
             structName,
@@ -243,10 +270,11 @@ class Typechecker(program: Program) {
           }
         case _ =>
           throw TypeError(
-            s"Field access is only allowed on structs. Found type ${typeToString(objType)}.",
+            s"Field access is only allowed on structs. Found type ${typeToString(typedObj.typ)}.",
             Some(obj.loc)
           )
       }
+      TypedFieldAccess(typedObj, fieldName, fieldType, loc)
 
     case FunctionCall(funcExpr, args, loc) =>
       val funcName = funcExpr match {
@@ -271,13 +299,13 @@ class Typechecker(program: Program) {
       }
 
       // Check each argument against its parameter
-      args.zip(funcDef.params).foreach { case (argExpr, param) =>
-        val argType = checkExpression(argExpr, context)
-        if (!areTypesEqual(argType, param.typ)) {
+      val typedArgs = args.zip(funcDef.params).map { case (argExpr, param) =>
+        val typedArg = checkExpression(argExpr, context)
+        if (!areTypesEqual(typedArg.typ, param.typ)) {
           throw TypeError(
             s"Type mismatch for argument to parameter '${param.name}'. Expected ${typeToString(
                 param.typ
-              )} but got ${typeToString(argType)}.",
+              )} but got ${typeToString(typedArg.typ)}.",
             Some(argExpr.loc)
           )
         }
@@ -285,7 +313,7 @@ class Typechecker(program: Program) {
         // Ownership checks based on parameter mode
         param.mode match {
           case ParamMode.Move(_) =>
-            if (!isCopyType(argType)) {
+            if (!isCopyType(typedArg.typ)) {
               handleMove(argExpr, context)
             }
           case ParamMode.Ref =>
@@ -293,9 +321,10 @@ class Typechecker(program: Program) {
           case ParamMode.Inout =>
             checkBorrow(argExpr, context, isMutableBorrow = true)
         }
+        typedArg
       }
 
-      funcDef.returnType
+      TypedFunctionCall(funcName, typedArgs, funcDef.returnType, loc)
   }
 
   /** Checks if an expression is a valid "place" (l-value) for assignment or
@@ -305,7 +334,7 @@ class Typechecker(program: Program) {
       expr: Expression,
       context: LocalContext,
       requireMutable: Boolean
-  ): Type = expr match {
+  ): TypedExpression = expr match {
     case Variable(name, loc) =>
       val varInfo = context.getOrElse(
         name,
@@ -323,13 +352,13 @@ class Typechecker(program: Program) {
             s"Cannot use '$name' as it has been moved.",
             Some(loc)
           )
-        case _ => varInfo.typ
+        case _ => TypedVariable(name, varInfo.typ, loc)
       }
 
     case FieldAccess(obj, fieldName, loc) =>
       // To modify a field, the container must be a mutable place.
-      val objType = checkPlaceExpression(obj, context, requireMutable)
-      objType match {
+      val typedObj = checkPlaceExpression(obj, context, requireMutable)
+      val fieldType = typedObj.typ match {
         case StructNameType(structName, _) =>
           val structDef = globalContext.structs.getOrElse(
             structName,
@@ -345,10 +374,11 @@ class Typechecker(program: Program) {
           }
         case _ =>
           throw TypeError(
-            s"Field access is only allowed on structs. Found type ${typeToString(objType)}.",
+            s"Field access is only allowed on structs. Found type ${typeToString(typedObj.typ)}.",
             Some(obj.loc)
           )
       }
+      TypedFieldAccess(typedObj, fieldName, fieldType, loc)
 
     case _ =>
       throw TypeError(
@@ -401,6 +431,8 @@ class Typechecker(program: Program) {
       context: LocalContext,
       isMutableBorrow: Boolean
   ): Unit = {
+    // We only need to check borrows of variables. Borrowing a temporary is an error.
+    // Borrowing a field is allowed if the base variable is accessible.
     argExpr match {
       case Variable(name, loc) =>
         val varInfo = context.getOrElse(
@@ -411,6 +443,12 @@ class Typechecker(program: Program) {
         )
 
         if (isMutableBorrow) { // 'inout' parameter
+          if (!varInfo.isMutable) {
+            throw TypeError(
+              s"Cannot mutably borrow immutable variable '$name'. Mark it as 'mut' or pass it to an 'inout' parameter.",
+              Some(loc)
+            )
+          }
           varInfo.state match {
             case VarState.Owned => // OK
             case VarState.Moved =>
@@ -444,6 +482,10 @@ class Typechecker(program: Program) {
               )
           }
         }
+      case FieldAccess(obj, _, loc) =>
+        // Recursively check if the base of the field access can be borrowed.
+        // This is a simplification; a real borrow checker would track borrows per-field.
+        checkBorrow(obj, context, isMutableBorrow)
       case _ =>
         throw TypeError(
           "Cannot borrow from a temporary value.",
@@ -458,7 +500,7 @@ class Typechecker(program: Program) {
       values: List[(String, Expression)],
       context: LocalContext,
       loc: SourceLocation
-  ): Unit = {
+  ): (List[(String, TypedExpression)], StructNameType) = {
     val structDef = globalContext.structs.getOrElse(
       typeName,
       throw TypeError(s"Unknown struct '$typeName'.", Some(loc))
@@ -474,19 +516,23 @@ class Typechecker(program: Program) {
       )
     }
 
-    values.foreach { case (fieldName, fieldExpr) =>
-      val fieldInitType = checkExpression(fieldExpr, context)
+    val typedValues = values.map { case (fieldName, fieldExpr) =>
+      val typedFieldExpr = checkExpression(fieldExpr, context)
       val expectedFieldType = structDef.fields.find(_._1 == fieldName).get._2
-      if (!areTypesEqual(fieldInitType, expectedFieldType)) {
+      if (!areTypesEqual(typedFieldExpr.typ, expectedFieldType)) {
         throw TypeError(
-          s"Type mismatch for field '$fieldName' in '$typeName' initialization. Expected ${typeToString(expectedFieldType)} but got ${typeToString(fieldInitType)}.",
+          s"Type mismatch for field '$fieldName' in '$typeName' initialization. Expected ${typeToString(
+              expectedFieldType
+            )} but got ${typeToString(typedFieldExpr.typ)}.",
           Some(fieldExpr.loc)
         )
       }
-      if (!isCopyType(fieldInitType)) {
+      if (!isCopyType(typedFieldExpr.typ)) {
         handleMove(fieldExpr, context)
       }
+      (fieldName, typedFieldExpr)
     }
+    (typedValues, StructNameType(typeName))
   }
 
   /** Checks if a type name exists in the global context. */
