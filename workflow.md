@@ -22,3 +22,7 @@ After the `git merge --squash` command, Git will have staged all the changes fro
 ```bash
 git commit
 ```
+
+## Working with gemini chat
+
+1. Tell gemini to give you a diff output for the changes and use `Get-Clipboard | patch -p1` to apply the changes.
