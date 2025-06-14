@@ -1,0 +1,84 @@
+package linear.typechecker.typed
+
+import linear.parser.SourceLocation
+import linear.parser._
+
+// --- Typed Expressions ---
+sealed trait TypedExpression {
+  val typ: Type
+  val loc: SourceLocation
+}
+
+case class TypedIntLiteral(value: Int, typ: Type, loc: SourceLocation)
+    extends TypedExpression
+case class TypedBoolLiteral(value: Boolean, typ: Type, loc: SourceLocation)
+    extends TypedExpression
+case class TypedVariable(name: String, typ: Type, loc: SourceLocation)
+    extends TypedExpression
+case class TypedStructLiteral(
+    typeName: String,
+    values: List[(String, TypedExpression)],
+    typ: Type,
+    loc: SourceLocation
+) extends TypedExpression
+case class TypedManagedStructLiteral(
+    typeName: String,
+    values: List[(String, TypedExpression)],
+    typ: Type,
+    loc: SourceLocation
+) extends TypedExpression
+case class TypedFieldAccess(
+    obj: TypedExpression,
+    fieldName: String,
+    typ: Type,
+    loc: SourceLocation
+) extends TypedExpression
+case class TypedFunctionCall(
+    funcName: String, // Simplified to a string for now
+    args: List[TypedExpression],
+    typ: Type,
+    loc: SourceLocation
+) extends TypedExpression
+
+// --- Typed Statements ---
+sealed trait TypedStatement { val loc: SourceLocation }
+case class TypedBlockStatement(
+    statements: List[TypedStatement],
+    loc: SourceLocation
+) extends TypedStatement
+case class TypedLetStatement(
+    varName: String,
+    isMutable: Boolean,
+    init: TypedExpression,
+    loc: SourceLocation
+) extends TypedStatement
+case class TypedExpressionStatement(expr: TypedExpression, loc: SourceLocation)
+    extends TypedStatement
+case class TypedReturnStatement(
+    expr: Option[TypedExpression],
+    loc: SourceLocation
+) extends TypedStatement
+case class TypedAssignmentStatement(
+    target: TypedExpression,
+    value: TypedExpression,
+    loc: SourceLocation
+) extends TypedStatement
+
+// --- Typed Definitions ---
+case class TypedFuncDef(
+    name: String,
+    params: List[Param],
+    returnType: Type,
+    body: TypedBlockStatement,
+    loc: SourceLocation
+)
+
+// --- Typed Program ---
+// The final, type-checked representation of the program.
+// This is the input to the code generator.
+case class TypedProgram(
+    structs: List[StructDef],
+    resources: List[ResourceDef],
+    functions: List[TypedFuncDef],
+    loc: SourceLocation
+)

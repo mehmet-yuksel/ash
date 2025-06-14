@@ -9,6 +9,8 @@ import parser.{
 }
 import linear.typechecker.Typechecker
 import linear.typechecker.TypeError
+import linear.codegen.CppCodeGenerator
+import java.nio.file.{Files, Paths}
 
 object Main {
   def main(args: Array[String]): Unit = {
@@ -18,59 +20,19 @@ struct Point {
   y: int
 }
 
+fn print_point(p: ref Point) -> unit {
+  // A native function we assume exists
+}
+
+fn translate(pt: inout Point) -> unit {
+  pt.x = pt.x;
+}
+
 fn main() -> unit {
-  let p1: Point = Point { x: 10, y: 20 };
-  let p2: Point = p1; // p1 is moved to p2
-
-  // Assuming a built-in print_int that takes int by value (copy)
-  print_int(p2.x); // OK
-
-  // print_int(p1.x); // ERROR: p1 used after move
-}
-
-fn pass_by_move(pt: Point) -> unit {
-  print_int(pt.x);
-  // pt.x = 50; // This should cause an error since pt is not mutable
-}
-
-fn pass_by_mut_move(pt: mut Point) -> unit {
-  pt.x = 100; // OK to modify because parameter is mutable
-  print_int(pt.x);
-}
-
-fn use_pass_by_move() -> unit {
-  let mut p3 = Point { x: 30, y: 30 };
-  pass_by_move(p3); // p3 is moved into pass_by_move
-  // print_int(p3.x); // ERROR: p3 used after move
-}
-
-fn use_pass_by_mut_move() -> unit {
-  let p4 = Point { x: 40, y: 40 };
-  pass_by_mut_move(p4); // p4 is moved into pass_by_mut_move, which can modify it
-  // print_int(p4.x); // ERROR: p4 used after move
-}
-
-fn pass_by_ref(pt: ref Point) -> unit {
-  print_int(pt.x); // OK to read
-  // pt.x = 100; // ERROR: cannot modify through immutable ref
-}
-
-fn pass_by_inout(pt: inout Point) -> unit {
-  print_int(pt.x);
-  pt.x = 42; // OK to modify
-}
-
-fn use_borrows() -> unit {
-  let mut p4 = Point { x: 40, y: 40 };
-  pass_by_ref(p4);    // Pass immutable reference
-  print_int(p4.x);   // p4 still owned and usable
-
-  pass_by_inout(p4); // Pass mutable reference
-  print_int(p4.x);   // p4 still owned, value might have changed
-}
-
-fn print_int(x: int) -> unit {
-  // Placeholder for print function
+  let mut p = Point { x: 10, y: 20 };
+  translate(p);
+  let p2 = p; // p is moved
+  print_point(p2);
 }
 """
     try {
@@ -78,7 +40,13 @@ fn print_int(x: int) -> unit {
       val programAst = languageParser.parseProgram()
       println("Successfully parsed managed types!")
       val typechecker = new Typechecker(programAst)
-      typechecker.check()
+      val typedProgram = typechecker.check()
+
+      val codegen = new CppCodeGenerator(typedProgram)
+      val cppCode = codegen.generate()
+      val path = Paths.get("program.cpp")
+      Files.write(path, cppCode.getBytes("UTF-8"))
+
     } catch {
       case e: LexerError =>
         println(s"Lexer error: ${e.getMessage}")
