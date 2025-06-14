@@ -32,7 +32,7 @@ case class ManagedType(innerType: Type, loc: Option[SourceLocation] = None)
 
 // Parameter Passing Modes
 enum ParamMode:
-  case Move // Pass by value, ownership moves (or copies for Copy types)
+  case Move(isMutable: Boolean = false) // Pass by value, ownership moves (or copies for Copy types)
   case Ref // Immutable borrow
   case Inout // Mutable borrow (exclusive borrow)
 
@@ -69,9 +69,10 @@ sealed trait Statement { val loc: SourceLocation }
 case class BlockStatement(statements: List[Statement], loc: SourceLocation)
     extends Statement
 
-// let varName: Type = init; (type annotation is optional)
+// let varName: Type = init; or let mut varName: Type = init; (type annotation is optional)
 case class LetStatement(
     varName: String,
+    isMutable: Boolean,
     typeAnnotation: Option[Type],
     init: Expression,
     loc: SourceLocation

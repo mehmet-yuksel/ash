@@ -32,6 +32,7 @@ class LanguageParser(input: String) {
     .token("RESOURCE", "resource\\b")
     .token("FN", "fn\\b")
     .token("LET", "let\\b")
+    .token("MUT", "mut\\b")
     .token("RETURN", "return\\b")
     .token("REF", "ref\\b")
     .token("INOUT", "inout\\b")
@@ -308,6 +309,7 @@ class LanguageParser(input: String) {
 
   private def parseLetStatement(p: Parser[Expression]): LetStatement = {
     val letToken = p.expect("LET")
+    val isMutable = p.matchAndAdvance("MUT")
     val varNameToken = p.expect("IDENTIFIER")
     val typeAnnotation = if (p.matchAndAdvance("COLON")) {
       Some(parseType(p))
@@ -317,7 +319,7 @@ class LanguageParser(input: String) {
     p.expect("EQUALS")
     val initExpr = p.parseExpression(Precedence.LOWEST)
     p.expect("SEMICOLON")
-    LetStatement(varNameToken.lexeme, typeAnnotation, initExpr, letToken.loc)
+    LetStatement(varNameToken.lexeme, isMutable, typeAnnotation, initExpr, letToken.loc)
   }
 
   private def parseReturnStatement(p: Parser[Expression]): ReturnStatement = {
@@ -423,9 +425,12 @@ class LanguageParser(input: String) {
     p.expect("COLON")
 
     val modePeekToken =
-      p.peek() // Peek at what might be 'ref', 'inout', or the base type
+      p.peek() // Peek at what might be 'mut', 'ref', 'inout', or the base type
 
     val mode = modePeekToken.typ match {
+      case "MUT" =>
+        p.advance() // Consume 'mut'
+        ParamMode.Move(isMutable = true)
       case "REF" =>
         p.advance() // Consume 'ref'
         ParamMode.Ref
@@ -433,7 +438,7 @@ class LanguageParser(input: String) {
         p.advance() // Consume 'inout'
         ParamMode.Inout
       case _ =>
-        ParamMode.Move // No mode keyword, next token is the base type
+        ParamMode.Move(isMutable = false) // No mode keyword, next token is the base type
     }
 
     val baseTypeAst = parseType(
