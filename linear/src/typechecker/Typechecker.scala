@@ -92,7 +92,11 @@ class Typechecker(program: Program) {
     // Populate context with function parameters
     func.params.foreach { param =>
       validateType(param.typ)
-      val isMutable = param.mode == ParamMode.Inout
+      val isMutable = param.mode match {
+        case ParamMode.Move(mutable) => mutable
+        case ParamMode.Inout         => true
+        case ParamMode.Ref           => false
+      }
       localContext(param.name) =
         VarInfo(param.typ, VarState.Owned, isMutable, param.loc)
     }
@@ -114,7 +118,7 @@ class Typechecker(program: Program) {
         checkStatement(s, blockContext, expectedReturnType)
       )
 
-    case LetStatement(varName, typeAnnotation, init, loc) =>
+    case LetStatement(varName, isMutable, typeAnnotation, init, loc) =>
       if (context.contains(varName)) {
         throw TypeError(
           s"Variable '$varName' is already defined in this scope.",
@@ -140,9 +144,8 @@ class Typechecker(program: Program) {
         handleMove(init, context)
       }
 
-      // Add the new variable to the context. 'let' bindings are immutable.
-      context(varName) =
-        VarInfo(finalType, VarState.Owned, isMutable = false, loc)
+      // Add the new variable to the context with mutability from the AST
+      context(varName) = VarInfo(finalType, VarState.Owned, isMutable, loc)
 
     case ExpressionStatement(expr, _) =>
       checkExpression(
@@ -281,7 +284,7 @@ class Typechecker(program: Program) {
 
         // Ownership checks based on parameter mode
         param.mode match {
-          case ParamMode.Move =>
+          case ParamMode.Move(_) =>
             if (!isCopyType(argType)) {
               handleMove(argExpr, context)
             }
@@ -310,7 +313,7 @@ class Typechecker(program: Program) {
       )
       if (requireMutable && !varInfo.isMutable) {
         throw TypeError(
-          s"Cannot assign to immutable variable '$name'. Note: only 'inout' parameters are mutable.",
+          s"Cannot assign to immutable variable '$name'. Use 'let mut' to declare mutable variables or 'inout' for mutable parameters.",
           Some(loc)
         )
       }

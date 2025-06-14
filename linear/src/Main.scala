@@ -30,12 +30,24 @@ fn main() -> unit {
 
 fn pass_by_move(pt: Point) -> unit {
   print_int(pt.x);
+  // pt.x = 50; // This should cause an error since pt is not mutable
+}
+
+fn pass_by_mut_move(pt: mut Point) -> unit {
+  pt.x = 100; // OK to modify because parameter is mutable
+  print_int(pt.x);
 }
 
 fn use_pass_by_move() -> unit {
-  let p3 = Point { x: 30, y: 30 };
+  let mut p3 = Point { x: 30, y: 30 };
   pass_by_move(p3); // p3 is moved into pass_by_move
   // print_int(p3.x); // ERROR: p3 used after move
+}
+
+fn use_pass_by_mut_move() -> unit {
+  let p4 = Point { x: 40, y: 40 };
+  pass_by_mut_move(p4); // p4 is moved into pass_by_mut_move, which can modify it
+  // print_int(p4.x); // ERROR: p4 used after move
 }
 
 fn pass_by_ref(pt: ref Point) -> unit {
@@ -49,7 +61,7 @@ fn pass_by_inout(pt: inout Point) -> unit {
 }
 
 fn use_borrows() -> unit {
-  let p4 = Point { x: 40, y: 40 };
+  let mut p4 = Point { x: 40, y: 40 };
   pass_by_ref(p4);    // Pass immutable reference
   print_int(p4.x);   // p4 still owned and usable
 
