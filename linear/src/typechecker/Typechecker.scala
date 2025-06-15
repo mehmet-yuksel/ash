@@ -236,13 +236,19 @@ class Typechecker(program: Program) {
       }
 
     case StructLiteral(typeName, values, loc) =>
-      val (typedValues, structType) =
+      val (typedValues, structType, _) =
         checkStructLiteral(typeName, values, context, loc)
       TypedStructLiteral(typeName, typedValues, structType, loc)
 
     case ManagedStructLiteral(typeName, values, loc) =>
-      val (typedValues, structType) =
+      val (typedValues, structType, isResource) =
         checkStructLiteral(typeName, values, context, loc)
+      if (isResource) {
+        throw TypeError(
+          s"Resource '$typeName' cannot be allocated as managed.",
+          Some(loc)
+        )
+      }
       TypedManagedStructLiteral(
         typeName,
         typedValues,
@@ -254,23 +260,10 @@ class Typechecker(program: Program) {
       val typedObj = checkExpression(obj, context)
       val fieldType = typedObj.typ match {
         case StructNameType(structName, _) =>
-          val structDef = globalContext.structs.getOrElse(
-            structName,
-            throw new IllegalStateException(
-              s"Struct definition for '$structName' not found in global context."
-            )
-          )
-          structDef.fields.find(_._1 == fieldName) match {
-            case Some((_, fieldType)) => fieldType
-            case None =>
-              throw TypeError(
-                s"Struct '$structName' has no field named '$fieldName'.",
-                Some(loc)
-              )
-          }
+          getFieldType(structName, fieldName, loc)
         case _ =>
           throw TypeError(
-            s"Field access is only allowed on structs. Found type ${typeToString(typedObj.typ)}.",
+            s"Field access is only allowed on structs and resources. Found type ${typeToString(typedObj.typ)}.",
             Some(obj.loc)
           )
       }
@@ -360,21 +353,10 @@ class Typechecker(program: Program) {
       val typedObj = checkPlaceExpression(obj, context, requireMutable)
       val fieldType = typedObj.typ match {
         case StructNameType(structName, _) =>
-          val structDef = globalContext.structs.getOrElse(
-            structName,
-            throw new IllegalStateException("Struct disappeared")
-          )
-          structDef.fields.find(_._1 == fieldName) match {
-            case Some((_, fieldType)) => fieldType
-            case None =>
-              throw TypeError(
-                s"Struct '$structName' has no field named '$fieldName'.",
-                Some(loc)
-              )
-          }
+          getFieldType(structName, fieldName, loc)
         case _ =>
           throw TypeError(
-            s"Field access is only allowed on structs. Found type ${typeToString(typedObj.typ)}.",
+            s"Field access is only allowed on structs and resources. Found type ${typeToString(typedObj.typ)}.",
             Some(obj.loc)
           )
       }
@@ -500,17 +482,26 @@ class Typechecker(program: Program) {
       values: List[(String, Expression)],
       context: LocalContext,
       loc: SourceLocation
-  ): (List[(String, TypedExpression)], StructNameType) = {
-    val structDef = globalContext.structs.getOrElse(
-      typeName,
-      throw TypeError(s"Unknown struct '$typeName'.", Some(loc))
-    )
+  ): (List[(String, TypedExpression)], StructNameType, Boolean) = {
+    val definition: Either[StructDef, ResourceDef] =
+      globalContext.structs
+        .get(typeName)
+        .map(Left(_))
+        .orElse(globalContext.resources.get(typeName).map(Right(_)))
+        .getOrElse(
+          throw TypeError(s"Unknown struct or resource '$typeName'.", Some(loc))
+        )
+
+    val (expectedFieldsList, isResource) = definition match {
+      case Left(structDef)    => (structDef.fields, false)
+      case Right(resourceDef) => (resourceDef.fields, true)
+    }
 
     val providedFields = values.map(_._1).toSet
-    val expectedFields = structDef.fields.map(_._1).toSet
+    val expectedFields = expectedFieldsList.map(_._1).toSet
     if (providedFields != expectedFields) {
       throw TypeError(
-        s"Struct '$typeName' initialization has incorrect fields. Expected: ${expectedFields
+        s"'$typeName' initialization has incorrect fields. Expected: ${expectedFields
             .mkString(", ")}, Got: ${providedFields.mkString(", ")}.",
         Some(loc)
       )
@@ -518,7 +509,7 @@ class Typechecker(program: Program) {
 
     val typedValues = values.map { case (fieldName, fieldExpr) =>
       val typedFieldExpr = checkExpression(fieldExpr, context)
-      val expectedFieldType = structDef.fields.find(_._1 == fieldName).get._2
+      val expectedFieldType = expectedFieldsList.find(_._1 == fieldName).get._2
       if (!areTypesEqual(typedFieldExpr.typ, expectedFieldType)) {
         throw TypeError(
           s"Type mismatch for field '$fieldName' in '$typeName' initialization. Expected ${typeToString(
@@ -532,7 +523,37 @@ class Typechecker(program: Program) {
       }
       (fieldName, typedFieldExpr)
     }
-    (typedValues, StructNameType(typeName))
+    (typedValues, StructNameType(typeName), isResource)
+  }
+
+  private def getFieldType(
+      structName: String,
+      fieldName: String,
+      loc: SourceLocation
+  ): Type = {
+    val definition: Either[StructDef, ResourceDef] =
+      globalContext.structs
+        .get(structName)
+        .map(Left(_))
+        .orElse(globalContext.resources.get(structName).map(Right(_)))
+        .getOrElse(
+          // This should not happen if validateType is called correctly
+          throw new IllegalStateException(
+            s"Definition for '$structName' not found in global context."
+          )
+        )
+    val fields = definition match {
+      case Left(s)  => s.fields
+      case Right(r) => r.fields
+    }
+    fields.find(_._1 == fieldName) match {
+      case Some((_, fieldType)) => fieldType
+      case None =>
+        throw TypeError(
+          s"Type '$structName' has no field named '$fieldName'.",
+          Some(loc)
+        )
+    }
   }
 
   /** Checks if a type name exists in the global context. */
