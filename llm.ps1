@@ -169,9 +169,10 @@ end {
             "/${relativePath}:"
             "--------------------------------------------------------------------------------"
             
+            $maxLineNumberWidth = ($lines.Count).ToString().Length
             $lineNumber = 1
             foreach ($line in $lines) {
-                "$lineNumber | $line"
+                "{0,$maxLineNumberWidth} | {1}" -f $lineNumber, $line
                 $lineNumber++
             }
 
