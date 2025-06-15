@@ -27,19 +27,22 @@ resource File {
 }
 
 
-fn print_point(p: ref Point) -> unit {
-  // A native function we assume exists
+fn print_point(p: managed Point) -> unit {
+  println!("Point(x: {}, y: {})", p.x, p.y);
 }
 
-fn translate(pt: inout Point) -> unit {
+fn translate(pt: mut managed Point) -> unit {
   pt.x = pt.x;
 }
 
 fn main() -> unit {
-  let mut p = Point { x: 10, y: 20 };
-  translate(p);
-  let p2 = p; // p is moved
+  println!("Starting program...");
+  let p1: managed Point = managed Point { x: 10, y: 20 };
+  let p2 = p1; // Handle is copied, not moved
+  translate(p2);
+  print_point(p1);
   print_point(p2);
+  println!("Program finished!");
 }
 """
     try {

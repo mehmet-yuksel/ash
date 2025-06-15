@@ -39,6 +39,12 @@ case class TypedFunctionCall(
     typ: Type,
     loc: SourceLocation
 ) extends TypedExpression
+case class TypedPrintlnExpression(
+    formatString: String,
+    args: List[TypedExpression],
+    typ: Type,
+    loc: SourceLocation
+) extends TypedExpression
 
 // --- Typed Statements ---
 sealed trait TypedStatement { val loc: SourceLocation }

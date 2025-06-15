@@ -121,6 +121,12 @@ case class FunctionCall(
     args: List[Expression],
     loc: SourceLocation
 ) extends Expression
+// Println macro: println!("format", args...)
+case class PrintlnExpression(
+    formatString: String,
+    args: List[Expression],
+    loc: SourceLocation
+) extends Expression
 
 // --- Program ---
 // A program is a collection of struct, resource and function definitions

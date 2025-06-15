@@ -21,7 +21,9 @@ class CppCodeGenerator(program: TypedProgram) {
   def generate(): String = {
     // --- Standard Headers ---
     forwardDeclarations.append("#include <iostream>\n")
-    forwardDeclarations.append("#include <utility> // For std::move\n\n")
+    forwardDeclarations.append("#include <utility> // For std::move\n")
+    forwardDeclarations.append("#include <print> // For std::println\n")
+    forwardDeclarations.append("#include \"gc.h\" // For garbage collection\n\n")
 
     // --- Struct and Resource Definitions ---
     program.structs.foreach(generateStructDef)
@@ -37,6 +39,7 @@ class CppCodeGenerator(program: TypedProgram) {
     // --- Main Entry Point ---
     // C++ main must return int
     implementations.append("int main() {\n")
+    implementations.append("    GC_init();\n")
     implementations.append("    main_ash();\n")
     implementations.append("    return 0;\n")
     implementations.append("}\n")
@@ -49,10 +52,7 @@ class CppCodeGenerator(program: TypedProgram) {
     case BoolType(_)             => "bool"
     case UnitType(_)             => "void"
     case StructNameType(name, _) => name
-    case ManagedType(_, _) =>
-      throw new NotImplementedError(
-        "Managed types are not yet supported in codegen."
-      )
+    case ManagedType(innerType, _) => s"${generateType(innerType)}*"
   }
 
   private def generateStructDef(s: StructDef): Unit = {
@@ -198,7 +198,12 @@ class CppCodeGenerator(program: TypedProgram) {
     case TypedBoolLiteral(value, _, _) => if (value) "true" else "false"
     case TypedVariable(name, _, _)     => name
     case TypedFieldAccess(obj, fieldName, _, _) =>
-      s"${generateExpression(obj)}.${fieldName}"
+      val objExpr = generateExpression(obj)
+      // Use -> for managed types (pointers), . for regular structs
+      obj.typ match {
+        case ManagedType(_, _) => s"$objExpr->$fieldName"
+        case _ => s"$objExpr.$fieldName"
+      }
     case TypedFunctionCall(funcName, args, _, _) =>
       val c_name = if (funcName == "main") "main_ash" else funcName
       val argList = args.map(generateExpression).mkString(", ")
@@ -214,9 +219,23 @@ class CppCodeGenerator(program: TypedProgram) {
         generateExpression(expr)
       }
       s"$typeName{${orderedValues.mkString(", ")}}"
-    case _: TypedManagedStructLiteral =>
-      throw new NotImplementedError(
-        "Managed types are not yet supported in codegen."
-      )
+    case TypedManagedStructLiteral(typeName, values, _, _) =>
+      // For managed types, allocate using GC_malloc and use placement new
+      val fields = structDefs.get(typeName).map(_.fields)
+        .orElse(resourceDefs.get(typeName).map(_.fields))
+        .getOrElse(throw new RuntimeException(s"Unknown type: $typeName"))
+      
+      val orderedValues = fields.map { case (fieldName, _) =>
+        val (_, expr) = values.find(_._1 == fieldName).get
+        generateExpression(expr)
+      }
+      s"new(GC_malloc(sizeof($typeName))) $typeName{${orderedValues.mkString(", ")}}"
+    case TypedPrintlnExpression(formatString, args, _, _) =>
+      val argList = args.map(generateExpression).mkString(", ")
+      if (args.nonEmpty) {
+        s"std::println(\"$formatString\", $argList)"
+      } else {
+        s"std::println(\"$formatString\")"
+      }
   }
 }
