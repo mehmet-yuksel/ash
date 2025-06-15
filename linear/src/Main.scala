@@ -23,7 +23,9 @@ struct Point {
 resource File {
   fd: int
 
-  cleanup { }
+  cleanup {
+    println!("Closing file descriptor: {}", fd);
+  }
 }
 
 
