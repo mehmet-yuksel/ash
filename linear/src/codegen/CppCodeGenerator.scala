@@ -13,7 +13,7 @@ class CppCodeGenerator(program: TypedProgram) {
   // A map from struct name to its definition for easy lookup.
   private val structDefs: Map[String, StructDef] =
     program.structs.map(s => s.name -> s).toMap
-  
+
   // A map from resource name to its definition for easy lookup.
   private val resourceDefs: Map[String, TypedResourceDef] =
     program.resources.map(r => r.name -> r).toMap
@@ -23,7 +23,9 @@ class CppCodeGenerator(program: TypedProgram) {
     forwardDeclarations.append("#include <iostream>\n")
     forwardDeclarations.append("#include <utility> // For std::move\n")
     forwardDeclarations.append("#include <print> // For std::println\n")
-    forwardDeclarations.append("#include \"gc.h\" // For garbage collection\n\n")
+    forwardDeclarations.append(
+      "#include \"gc.h\" // For garbage collection\n\n"
+    )
 
     // --- Struct and Resource Definitions ---
     program.structs.foreach(generateStructDef)
@@ -48,10 +50,10 @@ class CppCodeGenerator(program: TypedProgram) {
   }
 
   private def generateType(t: Type): String = t match {
-    case IntType(_)              => "int"
-    case BoolType(_)             => "bool"
-    case UnitType(_)             => "void"
-    case StructNameType(name, _) => name
+    case IntType(_)                => "int"
+    case BoolType(_)               => "bool"
+    case UnitType(_)               => "void"
+    case StructNameType(name, _)   => name
     case ManagedType(innerType, _) => s"${generateType(innerType)}*"
   }
 
@@ -72,22 +74,97 @@ class CppCodeGenerator(program: TypedProgram) {
         s"    ${generateType(fieldType)} ${fieldName};\n"
       )
     }
-    
-    // Generate destructor if cleanup block exists
-    r.cleanup match {
-      case Some(cleanupBlock) =>
-        forwardDeclarations.append(s"    ~${r.name}() {\n")
-        cleanupBlock match {
-          case TypedBlockStatement(statements, _) =>
-            statements.foreach(stmt => {
-              forwardDeclarations.append("        ")
-              generateStatementInline(stmt)
-            })
-        }
-        forwardDeclarations.append("    }\n")
-      case None => // No cleanup needed
+    forwardDeclarations.append("    bool owns_resource = true;\n\n")
+
+    // 2. Constructor for initialization from fields
+    val constructorParams = r.fields
+      .map { case (fieldName, fieldType) =>
+        s"${generateType(fieldType)} ${fieldName}_in"
+      }
+      .mkString(", ")
+    val constructorInits = r.fields
+      .map { case (fieldName, _) =>
+        s"${fieldName}(std::move(${fieldName}_in))"
+      }
+      .mkString(", ")
+
+    forwardDeclarations.append(s"    explicit ${r.name}(${constructorParams})")
+    if (r.fields.nonEmpty) {
+      forwardDeclarations.append(s" : ${constructorInits}")
     }
-    
+    forwardDeclarations.append(" {}\n\n")
+
+    // 3. Rule of 5
+    forwardDeclarations.append("    // --- Rule of 5/3 --- \n")
+
+    // Destructor
+    forwardDeclarations.append(s"    ~${r.name}() {\n")
+    r.cleanup.foreach { cleanupBlock =>
+      forwardDeclarations.append("        if (owns_resource) {\n")
+      cleanupBlock match {
+        case TypedBlockStatement(statements, _) =>
+          statements.foreach { stmt =>
+            forwardDeclarations.append("            ")
+            generateStatementInline(stmt)
+          }
+      }
+      forwardDeclarations.append("        }\n")
+    }
+    forwardDeclarations.append("    }\n\n")
+
+    // Delete copy operations
+    forwardDeclarations.append(s"    ${r.name}(const ${r.name}&) = delete;\n")
+    forwardDeclarations.append(
+      s"    ${r.name}& operator=(const ${r.name}&) = delete;\n\n"
+    )
+
+    // Move constructor
+    val moveCtorFieldInits = r.fields.map { case (fieldName, _) =>
+      s"${fieldName}(std::move(other.${fieldName}))"
+    }
+    val moveCtorInits =
+      (moveCtorFieldInits :+ "owns_resource(other.owns_resource)").mkString(
+        ", "
+      )
+
+    forwardDeclarations.append(
+      s"    ${r.name}(${r.name}&& other) noexcept : ${moveCtorInits} {\n"
+    )
+    forwardDeclarations.append("        other.owns_resource = false;\n")
+    forwardDeclarations.append("    }\n\n")
+
+    // Move assignment operator
+    forwardDeclarations.append(
+      s"    ${r.name}& operator=(${r.name}&& other) noexcept {\n"
+    )
+    forwardDeclarations.append("        if (this != &other) {\n")
+    // Cleanup existing resource
+    r.cleanup.foreach { cleanupBlock =>
+      forwardDeclarations.append("            if (owns_resource) {\n")
+      cleanupBlock match {
+        case TypedBlockStatement(statements, _) =>
+          statements.foreach { stmt =>
+            forwardDeclarations.append("                ")
+            generateStatementInline(stmt)
+          }
+      }
+      forwardDeclarations.append("            }\n")
+    }
+    // Move fields from other
+    r.fields.foreach { case (fieldName, _) =>
+      forwardDeclarations.append(
+        s"            ${fieldName} = std::move(other.${fieldName});\n"
+      )
+    }
+    // Transfer ownership
+    forwardDeclarations.append(
+      "            owns_resource = other.owns_resource;\n"
+    )
+    forwardDeclarations.append("            other.owns_resource = false;\n")
+    forwardDeclarations.append("        }\n")
+    forwardDeclarations.append("        return *this;\n")
+    forwardDeclarations.append("    }\n")
+
     forwardDeclarations.append("};\n\n")
   }
 
@@ -135,7 +212,9 @@ class CppCodeGenerator(program: TypedProgram) {
       case TypedLetStatement(varName, isMutable, init, _) =>
         val initExpr = generateExpression(init)
         val typeName = generateType(init.typ)
-        forwardDeclarations.append(s"$typeName $varName = std::move($initExpr);\n")
+        forwardDeclarations.append(
+          s"$typeName $varName = std::move($initExpr);\n"
+        )
 
       case TypedExpressionStatement(expr, _) =>
         forwardDeclarations.append(s"${generateExpression(expr)};\n")
@@ -202,29 +281,41 @@ class CppCodeGenerator(program: TypedProgram) {
       // Use -> for managed types (pointers), . for regular structs
       obj.typ match {
         case ManagedType(_, _) => s"$objExpr->$fieldName"
-        case _ => s"$objExpr.$fieldName"
+        case _                 => s"$objExpr.$fieldName"
       }
     case TypedFunctionCall(funcName, args, _, _) =>
       val c_name = if (funcName == "main") "main_ash" else funcName
       val argList = args.map(generateExpression).mkString(", ")
       s"$c_name($argList)"
     case TypedStructLiteral(typeName, values, _, _) =>
-      // C++ aggregate initialization requires fields in declaration order.
-      val fields = structDefs.get(typeName).map(_.fields)
+      val isResource = resourceDefs.contains(typeName)
+
+      val fields = structDefs
+        .get(typeName)
+        .map(_.fields)
         .orElse(resourceDefs.get(typeName).map(_.fields))
         .getOrElse(throw new RuntimeException(s"Unknown type: $typeName"))
-      
-      val orderedValues = fields.map { case (fieldName, _) =>
-        val (_, expr) = values.find(_._1 == fieldName).get
-        generateExpression(expr)
+
+      val orderedValues = fields
+        .map { case (fieldName, _) =>
+          val (_, expr) = values.find(_._1 == fieldName).get
+          generateExpression(expr)
+        }
+        .mkString(", ")
+
+      if (isResource) {
+        s"$typeName($orderedValues)"
+      } else {
+        s"$typeName{$orderedValues}"
       }
-      s"$typeName{${orderedValues.mkString(", ")}}"
     case TypedManagedStructLiteral(typeName, values, _, _) =>
       // For managed types, allocate using GC_malloc and use placement new
-      val fields = structDefs.get(typeName).map(_.fields)
+      val fields = structDefs
+        .get(typeName)
+        .map(_.fields)
         .orElse(resourceDefs.get(typeName).map(_.fields))
         .getOrElse(throw new RuntimeException(s"Unknown type: $typeName"))
-      
+
       val orderedValues = fields.map { case (fieldName, _) =>
         val (_, expr) = values.find(_._1 == fieldName).get
         generateExpression(expr)
