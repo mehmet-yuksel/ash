@@ -218,7 +218,8 @@ class Typechecker(program: Program) {
   /** Recursively checks an expression and returns its typed version. */
   private def checkExpression(
       expr: Expression,
-      context: LocalContext
+      context: LocalContext,
+      isManagedContext: Boolean = false
   ): TypedExpression = expr match {
     case IntLiteral(v, loc)  => TypedIntLiteral(v, IntType(), loc)
     case BoolLiteral(v, loc) => TypedBoolLiteral(v, BoolType(), loc)
@@ -236,13 +237,48 @@ class Typechecker(program: Program) {
       }
 
     case StructLiteral(typeName, values, loc) =>
-      val (typedValues, structType, _) =
-        checkStructLiteral(typeName, values, context, loc)
-      TypedStructLiteral(typeName, typedValues, structType, loc)
+      if (isManagedContext) {
+        val (typedValues, structType, isResource) =
+          checkStructLiteral(
+            typeName,
+            values,
+            context,
+            loc,
+            isManagedContext = true
+          )
+        if (isResource) {
+          throw TypeError(
+            s"Resource '$typeName' cannot be allocated as managed.",
+            Some(loc)
+          )
+        }
+        TypedManagedStructLiteral(
+          typeName,
+          typedValues,
+          ManagedType(structType),
+          loc
+        )
+      } else {
+        val (typedValues, structType, _) =
+          checkStructLiteral(
+            typeName,
+            values,
+            context,
+            loc,
+            isManagedContext = false
+          )
+        TypedStructLiteral(typeName, typedValues, structType, loc)
+      }
 
     case ManagedStructLiteral(typeName, values, loc) =>
       val (typedValues, structType, isResource) =
-        checkStructLiteral(typeName, values, context, loc)
+        checkStructLiteral(
+          typeName,
+          values,
+          context,
+          loc,
+          isManagedContext = true
+        )
       if (isResource) {
         throw TypeError(
           s"Resource '$typeName' cannot be allocated as managed.",
@@ -258,16 +294,31 @@ class Typechecker(program: Program) {
 
     case FieldAccess(obj, fieldName, loc) =>
       val typedObj = checkExpression(obj, context)
-      val fieldType = typedObj.typ match {
-        case StructNameType(structName, _) =>
-          getFieldType(structName, fieldName, loc)
+      val (baseType, isObjManaged) = typedObj.typ match {
+        case st @ StructNameType(_, _)             => (st, false)
+        case ManagedType(inner: StructNameType, _) => (inner, true)
+        case ManagedType(inner, _) =>
+          throw TypeError(
+            s"Field access on managed type is only allowed for structs. Found ${typeToString(ManagedType(inner))}",
+            Some(obj.loc)
+          )
         case _ =>
           throw TypeError(
             s"Field access is only allowed on structs and resources. Found type ${typeToString(typedObj.typ)}.",
             Some(obj.loc)
           )
       }
-      TypedFieldAccess(typedObj, fieldName, fieldType, loc)
+
+      val structName = baseType.name
+      val rawFieldType = getFieldType(structName, fieldName, loc)
+
+      val finalFieldType =
+        if (isObjManaged && isStructOrResourceType(rawFieldType)) {
+          ManagedType(rawFieldType)
+        } else {
+          rawFieldType
+        }
+      TypedFieldAccess(typedObj, fieldName, finalFieldType, loc)
 
     case FunctionCall(funcExpr, args, loc) =>
       val funcName = funcExpr match {
@@ -351,16 +402,30 @@ class Typechecker(program: Program) {
     case FieldAccess(obj, fieldName, loc) =>
       // To modify a field, the container must be a mutable place.
       val typedObj = checkPlaceExpression(obj, context, requireMutable)
-      val fieldType = typedObj.typ match {
-        case StructNameType(structName, _) =>
-          getFieldType(structName, fieldName, loc)
+      val (baseType, isObjManaged) = typedObj.typ match {
+        case st @ StructNameType(_, _)             => (st, false)
+        case ManagedType(inner: StructNameType, _) => (inner, true)
+        case ManagedType(inner, _) =>
+          throw TypeError(
+            s"Field access on managed type is only allowed for structs. Found ${typeToString(ManagedType(inner))}",
+            Some(obj.loc)
+          )
         case _ =>
           throw TypeError(
             s"Field access is only allowed on structs and resources. Found type ${typeToString(typedObj.typ)}.",
             Some(obj.loc)
           )
       }
-      TypedFieldAccess(typedObj, fieldName, fieldType, loc)
+      val structName = baseType.name
+      val rawFieldType = getFieldType(structName, fieldName, loc)
+
+      val finalFieldType =
+        if (isObjManaged && isStructOrResourceType(rawFieldType)) {
+          ManagedType(rawFieldType)
+        } else {
+          rawFieldType
+        }
+      TypedFieldAccess(typedObj, fieldName, finalFieldType, loc)
 
     case _ =>
       throw TypeError(
@@ -481,7 +546,8 @@ class Typechecker(program: Program) {
       typeName: String,
       values: List[(String, Expression)],
       context: LocalContext,
-      loc: SourceLocation
+      loc: SourceLocation,
+      isManagedContext: Boolean
   ): (List[(String, TypedExpression)], StructNameType, Boolean) = {
     val definition: Either[StructDef, ResourceDef] =
       globalContext.structs
@@ -508,12 +574,20 @@ class Typechecker(program: Program) {
     }
 
     val typedValues = values.map { case (fieldName, fieldExpr) =>
-      val typedFieldExpr = checkExpression(fieldExpr, context)
+      val typedFieldExpr = checkExpression(fieldExpr, context, isManagedContext)
       val expectedFieldType = expectedFieldsList.find(_._1 == fieldName).get._2
-      if (!areTypesEqual(typedFieldExpr.typ, expectedFieldType)) {
+
+      val finalExpectedType =
+        if (isManagedContext && isStructOrResourceType(expectedFieldType)) {
+          ManagedType(expectedFieldType)
+        } else {
+          expectedFieldType
+        }
+
+      if (!areTypesEqual(typedFieldExpr.typ, finalExpectedType)) {
         throw TypeError(
           s"Type mismatch for field '$fieldName' in '$typeName' initialization. Expected ${typeToString(
-              expectedFieldType
+              finalExpectedType
             )} but got ${typeToString(typedFieldExpr.typ)}.",
           Some(fieldExpr.loc)
         )
@@ -554,6 +628,15 @@ class Typechecker(program: Program) {
           Some(loc)
         )
     }
+  }
+
+  /** Helper to check if a type is a struct or resource. */
+  private def isStructOrResourceType(t: Type): Boolean = t match {
+    case StructNameType(name, _) =>
+      globalContext.structs.contains(name) || globalContext.resources.contains(
+        name
+      )
+    case _ => false
   }
 
   /** Checks if a type name exists in the global context. */

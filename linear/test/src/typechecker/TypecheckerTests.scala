@@ -183,5 +183,79 @@ object TypecheckerTests extends utest.TestSuite {
         )
       }
     }
+    test("managed types") {
+      test("nested managed struct initialization") {
+        val code = """
+        struct Bar { val: int }
+        struct Foo { bar: Bar }
+        fn main() -> unit {
+          let foo = managed Foo { bar: Bar { val: 42 } };
+          let b: managed Bar = foo.bar;
+        }
+        """
+        val languageParser = new parser.LanguageParser(code)
+        val programAst = languageParser.parseProgram()
+        val typechecker = new Typechecker(programAst)
+        val typedProgram = typechecker.check()
+        assert(true)
+      }
+
+      test("field access on managed struct preserves managed property") {
+        val code = """
+        struct Bar { val: int }
+        struct Foo { bar: Bar }
+        fn main() -> unit {
+          let foo = managed Foo { bar: Bar { val: 42 } };
+          let b = foo.bar;
+          let c: Bar = b;
+        }
+        """
+        val e = intercept[TypeError] {
+          val languageParser = new parser.LanguageParser(code)
+          val programAst = languageParser.parseProgram()
+          val typechecker = new Typechecker(programAst)
+          typechecker.check()
+        }
+        assert(
+          e.getMessage == "Type mismatch for 'c'. Expected Bar but got managed Bar."
+        )
+      }
+
+      test("mutable field access on managed struct") {
+        val code = """
+        struct Bar { val: int }
+        struct Foo { bar: Bar }
+        fn main() -> unit {
+          let mut foo = managed Foo { bar: Bar { val: 42 } };
+          foo.bar.val = 100;
+        }
+        """
+        val languageParser = new parser.LanguageParser(code)
+        val programAst = languageParser.parseProgram()
+        val typechecker = new Typechecker(programAst)
+        val typedProgram = typechecker.check()
+        assert(true)
+      }
+
+      test("cannot assign linear struct to managed field inside literal") {
+        val code = """
+        struct Bar { val: int }
+        struct Foo { bar: Bar }
+        fn main() -> unit {
+          let linear_bar = Bar { val: 1 };
+          let foo = managed Foo { bar: linear_bar };
+        }
+        """
+        val e = intercept[TypeError] {
+          val languageParser = new parser.LanguageParser(code)
+          val programAst = languageParser.parseProgram()
+          val typechecker = new Typechecker(programAst)
+          typechecker.check()
+        }
+        assert(
+          e.getMessage == "Type mismatch for field 'bar' in 'Foo' initialization. Expected managed Bar but got Bar."
+        )
+      }
+    }
   }
 }
