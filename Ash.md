@@ -79,7 +79,34 @@ fn main() -> unit {
 }
 ```
 
-**The Managed Boundary Rule:** When an object is allocated as `managed`, it and all of its contents are considered managed. You cannot move any value out from within this boundary. This ensures the integrity of shared data.
+**The Managed Boundary Rule:** When an object is allocated as `managed`, it and everything it contains are placed on the GC heap. This has two important consequences:
+
+1.  **Propagation:** The `managed` property propagates downwards. Accessing a field of a `managed` object gives you a `managed` handle to that field. Similarly, any nested structs initialized within a `managed` context are also automatically allocated on the heap.
+2.  **Immovability:** You cannot move any value out from within this boundary. This ensures the integrity of the shared data structure.
+
+```ash
+struct Bar { value: int }
+struct Foo { bar: Bar }
+
+fn main() -> unit {
+  // foo is a handle to a managed Foo object.
+  // The nested Bar object is also allocated on the heap.
+  let foo: managed Foo = managed Foo { bar: Bar { value: 42 } };
+
+  // Accessing foo.bar doesn't give a linear `Bar`.
+  // Instead, it gives a `managed Bar` handle.
+  let bar_handle: managed Bar = foo.bar;
+
+  // We can now share and modify the nested Bar object independently.
+  let another_bar_handle = bar_handle;
+  another_bar_handle.value = 99;
+
+  print_int(foo.bar.value); // Prints 99
+
+  // This would be a compile error because you cannot move data out of the managed boundary.
+  // let b: Bar = foo.bar; // ERROR: cannot move out of managed context
+}
+```
 
 ### 3.3. Resource Types (`resource`)
 
