@@ -83,14 +83,70 @@ class Typechecker(program: Program) {
       )
     }
 
+    // Check all resource cleanup blocks
+    program.resources.foreach(checkResourceCleanup)
+
     // Check all function bodies and collect the typed versions
     val typedFunctions = program.functions.map(checkFunction)
+    val typedResources = program.resources.map(checkResource)
 
     TypedProgram(
       program.structs,
-      program.resources,
+      typedResources,
       typedFunctions,
       program.loc
+    )
+  }
+
+  /** Checks a resource's cleanup block. */
+  private def checkResourceCleanup(resource: ResourceDef): Unit = {
+    resource.cleanup.foreach { cleanupBlock =>
+      val localContext: LocalContext = mutable.Map.empty
+      
+      // Add all resource fields to the cleanup context as mutable owned variables
+      resource.fields.foreach { case (fieldName, fieldType) =>
+        validateType(fieldType)
+        localContext(fieldName) = VarInfo(
+          fieldType, 
+          VarState.Owned, 
+          isMutable = true,  // All fields are mutable in cleanup
+          resource.loc
+        )
+      }
+      
+      // Check the cleanup block with unit return type expected
+      checkStatement(cleanupBlock, localContext, Some(UnitType()))
+    }
+  }
+
+  /** Converts a ResourceDef to TypedResourceDef. */
+  private def checkResource(resource: ResourceDef): TypedResourceDef = {
+    val typedCleanup = resource.cleanup.map { cleanupBlock =>
+      val localContext: LocalContext = mutable.Map.empty
+      
+      // Add all resource fields to the cleanup context as mutable owned variables
+      resource.fields.foreach { case (fieldName, fieldType) =>
+        validateType(fieldType)
+        localContext(fieldName) = VarInfo(
+          fieldType, 
+          VarState.Owned, 
+          isMutable = true,  // All fields are mutable in cleanup
+          resource.loc
+        )
+      }
+      
+      // Check and convert the cleanup block
+      checkStatement(cleanupBlock, localContext, Some(UnitType())) match {
+        case block: TypedBlockStatement => block
+        case other => TypedBlockStatement(List(other), cleanupBlock.loc)
+      }
+    }
+    
+    TypedResourceDef(
+      resource.name,
+      resource.fields,
+      typedCleanup,
+      resource.loc
     )
   }
 

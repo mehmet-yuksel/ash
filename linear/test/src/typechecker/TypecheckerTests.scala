@@ -257,5 +257,115 @@ object TypecheckerTests extends utest.TestSuite {
         )
       }
     }
+    test("resource cleanup blocks") {
+      test("cleanup block has access to resource fields") {
+        val code = """
+        resource File {
+          fd: int
+
+          cleanup {
+            close(fd);
+          }
+        }
+
+        fn close(fd: int) -> unit {
+          // assume this is a native function
+        }
+
+        fn main() -> unit {
+          // main function
+        }
+        """
+        val languageParser = new parser.LanguageParser(code)
+        val programAst = languageParser.parseProgram()
+        val typechecker = new Typechecker(programAst)
+        val typedProgram = typechecker.check()
+        assert(true)
+      }
+
+      test("cleanup block can mutate resource fields") {
+        val code = """
+        resource Counter {
+          count: int
+
+          cleanup {
+            count = 0;
+            finalize(count);
+          }
+        }
+
+        fn finalize(c: int) -> unit {
+          // assume this is a native function
+        }
+
+        fn main() -> unit {
+          // main function
+        }
+        """
+        val languageParser = new parser.LanguageParser(code)
+        val programAst = languageParser.parseProgram()
+        val typechecker = new Typechecker(programAst)
+        val typedProgram = typechecker.check()
+        assert(true)
+      }
+
+      test("cleanup block cannot access non-existent fields") {
+        val e = intercept[TypeError] {
+          val code = """
+        resource File {
+          fd: int
+
+          cleanup {
+            close(nonexistent_field);
+          }
+        }
+
+        fn close(fd: int) -> unit {
+          // assume this is a native function
+        }
+
+        fn main() -> unit {
+          // main function
+        }
+        """
+          val languageParser = new parser.LanguageParser(code)
+          val programAst = languageParser.parseProgram()
+          val typechecker = new Typechecker(programAst)
+          val typedProgram = typechecker.check()
+        }
+        assert(
+          e.getMessage.contains("Variable 'nonexistent_field' not found")
+        )
+      }
+
+      test("cleanup block with wrong field type") {
+        val e = intercept[TypeError] {
+          val code = """
+        resource File {
+          fd: int
+
+          cleanup {
+            process_string(fd);
+          }
+        }
+
+        fn process_string(s: bool) -> unit {
+          // assume this is a native function
+        }
+
+        fn main() -> unit {
+          // main function
+        }
+        """
+          val languageParser = new parser.LanguageParser(code)
+          val programAst = languageParser.parseProgram()
+          val typechecker = new Typechecker(programAst)
+          val typedProgram = typechecker.check()
+        }
+        assert(
+          e.getMessage.contains("Type mismatch for argument to parameter")
+        )
+      }
+    }
   }
 }

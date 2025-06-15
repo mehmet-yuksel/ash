@@ -42,6 +42,7 @@ class LanguageParser(input: String) {
     .token("UNIT_TYPE", "unit\\b")
     .token("TRUE", "true\\b")
     .token("FALSE", "false\\b")
+    .token("CLEANUP", "cleanup\\b")
     // TODO: Add other keywords like if, else, while etc. later
 
     // Identifiers
@@ -399,17 +400,28 @@ class LanguageParser(input: String) {
     val nameToken = p.expect("IDENTIFIER")
     p.expect("LBRACE")
     val fields = ListBuffer.empty[(String, Type)]
-    while (p.peek().typ != "RBRACE" && p.peek().typ != "EOF") {
+    
+    // Parse fields
+    while (p.peek().typ != "RBRACE" && p.peek().typ != "EOF" && p.peek().typ != "CLEANUP") {
       val fieldNameToken = p.expect("IDENTIFIER")
       p.expect("COLON")
       val fieldType = parseType(p)
       fields += ((fieldNameToken.lexeme, fieldType))
-      if (p.peek().typ == "RBRACE") {
+      if (p.peek().typ == "RBRACE" || p.peek().typ == "CLEANUP") {
         // allow trailing comma if we wanted: p.matchAndAdvance("COMMA")
       } else {
-        p.expect("COMMA") // Require comma if not the last field before RBRACE
+        p.expect("COMMA") // Require comma if not the last field before RBRACE or CLEANUP
       }
     }
+    
+    // Parse optional cleanup block
+    val cleanup = if (p.peek().typ == "CLEANUP") {
+      p.expect("CLEANUP")
+      Some(parseBlockStatement(p))
+    } else {
+      None
+    }
+    
     val rBraceToken = p.expect("RBRACE")
     val loc = SourceLocation(
       resourceToken.loc.line,
@@ -417,7 +429,7 @@ class LanguageParser(input: String) {
       resourceToken.loc.startPosition,
       rBraceToken.loc.endPosition
     )
-    ResourceDef(nameToken.lexeme, fields.toList, loc)
+    ResourceDef(nameToken.lexeme, fields.toList, cleanup, loc)
   }
 
   private def parseParam(p: Parser[Expression]): Param = {

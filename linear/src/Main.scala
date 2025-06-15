@@ -20,6 +20,13 @@ struct Point {
   y: int
 }
 
+resource File {
+  fd: int
+
+  cleanup { }
+}
+
+
 fn print_point(p: ref Point) -> unit {
   // A native function we assume exists
 }
