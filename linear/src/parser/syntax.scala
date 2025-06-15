@@ -43,6 +43,7 @@ class LanguageParser(input: String) {
     .token("TRUE", "true\\b")
     .token("FALSE", "false\\b")
     .token("CLEANUP", "cleanup\\b")
+    .token("PRINTLN", "println!")
     // TODO: Add other keywords like if, else, while etc. later
 
     // Identifiers
@@ -50,7 +51,7 @@ class LanguageParser(input: String) {
 
     // Literals
     .token("INT_LITERAL", "[0-9]+")
-    // String literals would go here if needed
+    .token("STRING_LITERAL", "\"[^\"]*\"")
 
     // Operators and Punctuation
     .token("LPAREN", "\\(")
@@ -77,6 +78,7 @@ class LanguageParser(input: String) {
     .prefix("FALSE", parseBooleanLiteral)
     .prefix("LPAREN", parseGroupedExpression)
     .prefix("MANAGED", parseManagedExpression)
+    .prefix("PRINTLN", parsePrintlnExpression)
   // Prefix parselets for struct literals are handled by parseIdentifier
   // when it sees an IDENTIFIER followed by LBRACE
 
@@ -149,6 +151,30 @@ class LanguageParser(input: String) {
             .lexeme}' at line ${p.peek().loc.line}, column ${p.peek().loc.column}\n$preview"
       )
     }
+  }
+
+  private def parsePrintlnExpression(
+      p: Parser[Expression],
+      token: Token
+  ): Expression = {
+    // token is the "println!" keyword
+    p.expect("LPAREN")
+    val formatStringToken = p.expect("STRING_LITERAL")
+    // Remove quotes from string literal
+    val formatString = formatStringToken.lexeme.substring(1, formatStringToken.lexeme.length - 1)
+    
+    val args = ListBuffer.empty[Expression]
+    while (p.matchAndAdvance("COMMA")) {
+      args += p.parseExpression(Precedence.LOWEST)
+    }
+    val rParenToken = p.expect("RPAREN")
+    val loc = SourceLocation(
+      token.loc.line,
+      token.loc.column,
+      token.loc.startPosition,
+      rParenToken.loc.endPosition
+    )
+    PrintlnExpression(formatString, args.toList, loc)
   }
 
   private def parseStructLiteral(

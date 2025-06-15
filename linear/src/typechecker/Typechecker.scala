@@ -425,6 +425,12 @@ class Typechecker(program: Program) {
       }
 
       TypedFunctionCall(funcName, typedArgs, funcDef.returnType, loc)
+
+    case PrintlnExpression(formatString, args, loc) =>
+      // Type check all arguments - they can be any type
+      val typedArgs = args.map(checkExpression(_, context))
+      // println! always returns unit
+      TypedPrintlnExpression(formatString, typedArgs, UnitType(), loc)
   }
 
   /** Checks if an expression is a valid "place" (l-value) for assignment or
@@ -730,6 +736,7 @@ class Typechecker(program: Program) {
   /** Determines if a type is a simple "Copy" type (like primitives). */
   private def isCopyType(t: Type): Boolean = t match {
     case IntType(_) | BoolType(_) | UnitType(_) => true
-    case _ => false // Structs, Resources, Managed types are Move types
+    case ManagedType(_, _) => true // Managed types are handles that can be copied
+    case _ => false // Structs, Resources are Move types
   }
 }
