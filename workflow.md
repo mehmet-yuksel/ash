@@ -25,7 +25,13 @@ git commit
 
 ## Working with gemini chat
 
-1. Tell gemini to give you a diff output for the changes and use `Get-Clipboard | patch -p1` to apply the changes.
+Tell gemini to give you a diff output for the changes and use `Get-Clipboard | patch -p1` to apply the changes.
+
+**Useful System Prompt for One-Off Scripts**
+
+- Don't add comments for the changes you made like `//modified: ...` or `//Here's the change` etc.
+- Only make changes directly related to the task and nothing else. Keep everything else intact.
+- Return the whole code as modified.
 
 ## Using clang
 
