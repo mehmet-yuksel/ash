@@ -48,6 +48,7 @@ case class StructDef(
 case class ResourceDef(
     name: String,
     fields: List[(String, Type)],
+    cleanup: Option[BlockStatement],
     loc: SourceLocation
 )
 

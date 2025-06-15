@@ -12,9 +12,11 @@ class CppCodeGenerator(program: TypedProgram) {
 
   // A map from struct name to its definition for easy lookup.
   private val structDefs: Map[String, StructDef] =
-    (program.structs.map(s => s.name -> s) ++ program.resources.map(r =>
-      r.name -> r.asInstanceOf[StructDef]
-    )).toMap
+    program.structs.map(s => s.name -> s).toMap
+  
+  // A map from resource name to its definition for easy lookup.
+  private val resourceDefs: Map[String, TypedResourceDef] =
+    program.resources.map(r => r.name -> r).toMap
 
   def generate(): String = {
     // --- Standard Headers ---
@@ -23,6 +25,7 @@ class CppCodeGenerator(program: TypedProgram) {
 
     // --- Struct and Resource Definitions ---
     program.structs.foreach(generateStructDef)
+    program.resources.foreach(generateResourceDef)
 
     // --- Function Forward Declarations ---
     program.functions.foreach(generateFunctionForwardDecl)
@@ -62,6 +65,32 @@ class CppCodeGenerator(program: TypedProgram) {
     forwardDeclarations.append("};\n\n")
   }
 
+  private def generateResourceDef(r: TypedResourceDef): Unit = {
+    forwardDeclarations.append(s"struct ${r.name} {\n")
+    r.fields.foreach { case (fieldName, fieldType) =>
+      forwardDeclarations.append(
+        s"    ${generateType(fieldType)} ${fieldName};\n"
+      )
+    }
+    
+    // Generate destructor if cleanup block exists
+    r.cleanup match {
+      case Some(cleanupBlock) =>
+        forwardDeclarations.append(s"    ~${r.name}() {\n")
+        cleanupBlock match {
+          case TypedBlockStatement(statements, _) =>
+            statements.foreach(stmt => {
+              forwardDeclarations.append("        ")
+              generateStatementInline(stmt)
+            })
+        }
+        forwardDeclarations.append("    }\n")
+      case None => // No cleanup needed
+    }
+    
+    forwardDeclarations.append("};\n\n")
+  }
+
   private def generateFunctionForwardDecl(f: TypedFuncDef): Unit = {
     val c_name = if (f.name == "main") "main_ash" else f.name
     forwardDeclarations.append(
@@ -74,12 +103,7 @@ class CppCodeGenerator(program: TypedProgram) {
     implementations.append(
       s"${generateType(f.returnType)} ${c_name}(${generateParams(f.params)}) {\n"
     )
-    f.body match {
-      case TypedBlockStatement(statements, _) =>
-        statements.foreach(s => generateStatement(s, 1))
-      case _ =>
-        generateStatement(f.body, 1)
-    }
+    f.body.statements.foreach(s => generateStatement(s, 1))
     implementations.append("}\n\n")
   }
 
@@ -97,6 +121,38 @@ class CppCodeGenerator(program: TypedProgram) {
   }
 
   private def indent(level: Int): String = "    " * level
+
+  private def generateStatementInline(stmt: TypedStatement): Unit = {
+    stmt match {
+      case TypedBlockStatement(statements, _) =>
+        forwardDeclarations.append("{\n")
+        statements.foreach(s => {
+          forwardDeclarations.append("            ")
+          generateStatementInline(s)
+        })
+        forwardDeclarations.append("        }\n")
+
+      case TypedLetStatement(varName, isMutable, init, _) =>
+        val initExpr = generateExpression(init)
+        val typeName = generateType(init.typ)
+        forwardDeclarations.append(s"$typeName $varName = std::move($initExpr);\n")
+
+      case TypedExpressionStatement(expr, _) =>
+        forwardDeclarations.append(s"${generateExpression(expr)};\n")
+
+      case TypedReturnStatement(exprOpt, _) =>
+        exprOpt match {
+          case Some(expr) =>
+            forwardDeclarations.append(s"return ${generateExpression(expr)};\n")
+          case None => forwardDeclarations.append("return;\n")
+        }
+
+      case TypedAssignmentStatement(target, value, _) =>
+        forwardDeclarations.append(
+          s"${generateExpression(target)} = std::move(${generateExpression(value)});\n"
+        )
+    }
+  }
 
   private def generateStatement(
       stmt: TypedStatement,
@@ -149,8 +205,11 @@ class CppCodeGenerator(program: TypedProgram) {
       s"$c_name($argList)"
     case TypedStructLiteral(typeName, values, _, _) =>
       // C++ aggregate initialization requires fields in declaration order.
-      val structDef = structDefs(typeName)
-      val orderedValues = structDef.fields.map { case (fieldName, _) =>
+      val fields = structDefs.get(typeName).map(_.fields)
+        .orElse(resourceDefs.get(typeName).map(_.fields))
+        .getOrElse(throw new RuntimeException(s"Unknown type: $typeName"))
+      
+      val orderedValues = fields.map { case (fieldName, _) =>
         val (_, expr) = values.find(_._1 == fieldName).get
         generateExpression(expr)
       }
