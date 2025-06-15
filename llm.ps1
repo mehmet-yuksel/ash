@@ -159,25 +159,31 @@ end {
         $relativePath = $relativePath.Replace([System.IO.Path]::DirectorySeparatorChar, '/')
 
         try {
-            Write-Verbose "Reading file: $($fileInfo.FullName) (Relative: $relativePath)"
-            # Use -Raw to get content as a single string, crucial for LLMs
+            Write-Verbose "Reading file: $($fileInfo.FullName) (Relative: /$relativePath)"
+            # Get content as an array of lines for line numbering
             # Specify UTF8 encoding, common for code files
-            $content = Get-Content -Path $fileInfo.FullName -Raw -Encoding UTF8 -ErrorAction Stop
+            $lines = Get-Content -Path $fileInfo.FullName -Encoding UTF8 -ErrorAction Stop
 
-            # Output the formatted section with markdown code fence
-            "--- File: $relativePath ---"
-            "``````"
-            $content
-            "``````"
+            # Output the formatted section
+            "--------------------------------------------------------------------------------"
+            "/${relativePath}:"
+            "--------------------------------------------------------------------------------"
+            
+            $lineNumber = 1
+            foreach ($line in $lines) {
+                "$lineNumber | $line"
+                $lineNumber++
+            }
+
             "" # Add a blank line for separation
         }
         catch {
             Write-Warning "Could not read content of file '$($fileInfo.FullName)': $($_.Exception.Message)"
             # Output an error message within the context for the specific file
-            "--- File: $relativePath ---"
-            "``````"
+            "--------------------------------------------------------------------------------"
+            "/${relativePath}:"
+            "--------------------------------------------------------------------------------"
             "*** Error: Could not read file content. $($_.Exception.Message) ***"
-            "``````"
             ""
         }
     }
