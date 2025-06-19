@@ -378,7 +378,7 @@ object Compiler {
     try {
       val languageParser = new LanguageParser(source)
       val programAst = languageParser.parseProgram()
-      val typechecker = new Typechecker(programAst)
+      val typechecker = new Typechecker(programAst, source)
       val typedProgram = typechecker.check()
 
       val codegen = new CppCodeGenerator(typedProgram)

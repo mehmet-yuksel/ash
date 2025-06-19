@@ -1,6 +1,7 @@
 package linear.typechecker
 
 import linear.parser._
+import linear.parser.ErrorUtils
 import linear.typechecker.typed._
 
 import scala.collection.mutable
@@ -30,14 +31,28 @@ type LocalContext = mutable.Map[String, VarInfo]
 case class TypeError(message: String, loc: Option[SourceLocation] = None)
     extends Exception(message)
 
-class Typechecker(program: Program) {
+class Typechecker(program: Program, input: String) {
+
+  // Helper method to create TypeError with preview
+  private def createTypeError(
+      message: String,
+      loc: Option[SourceLocation] = None
+  ): TypeError = {
+    loc match {
+      case Some(location) =>
+        val preview = ErrorUtils.generateErrorPreview(input, location)
+        TypeError(s"$message\n$preview", loc)
+      case None =>
+        TypeError(message, loc)
+    }
+  }
 
   // Build the global context from top-level definitions
   private val globalContext: GlobalContext = {
     // Check for duplicate struct names
     val duplicateStruct = program.structs.groupBy(_.name).find(_._2.size > 1)
     duplicateStruct.foreach { case (name, defs) =>
-      throw TypeError(
+      throw createTypeError(
         s"Struct '$name' is defined multiple times.",
         Some(defs(1).loc)
       )
@@ -47,7 +62,7 @@ class Typechecker(program: Program) {
     val duplicateResource =
       program.resources.groupBy(_.name).find(_._2.size > 1)
     duplicateResource.foreach { case (name, defs) =>
-      throw TypeError(
+      throw createTypeError(
         s"Resource '$name' is defined multiple times.",
         Some(defs(1).loc)
       )
@@ -57,7 +72,7 @@ class Typechecker(program: Program) {
     val duplicateFunction =
       program.functions.groupBy(_.name).find(_._2.size > 1)
     duplicateFunction.foreach { case (name, defs) =>
-      throw TypeError(
+      throw createTypeError(
         s"Function '$name' is defined multiple times.",
         Some(defs(1).loc)
       )
@@ -74,10 +89,10 @@ class Typechecker(program: Program) {
   def check(): TypedProgram = {
     val mainFunc = globalContext.functions.getOrElse(
       "main",
-      throw TypeError("No 'main' function found in the program.")
+      throw createTypeError("No 'main' function found in the program.")
     )
     if (mainFunc.params.nonEmpty) {
-      throw TypeError(
+      throw createTypeError(
         "'main' function cannot have parameters.",
         Some(mainFunc.loc)
       )
@@ -102,18 +117,18 @@ class Typechecker(program: Program) {
   private def checkResourceCleanup(resource: ResourceDef): Unit = {
     resource.cleanup.foreach { cleanupBlock =>
       val localContext: LocalContext = mutable.Map.empty
-      
+
       // Add all resource fields to the cleanup context as mutable owned variables
       resource.fields.foreach { case (fieldName, fieldType) =>
         validateType(fieldType)
         localContext(fieldName) = VarInfo(
-          fieldType, 
-          VarState.Owned, 
-          isMutable = true,  // All fields are mutable in cleanup
+          fieldType,
+          VarState.Owned,
+          isMutable = true, // All fields are mutable in cleanup
           resource.loc
         )
       }
-      
+
       // Check the cleanup block with unit return type expected
       checkStatement(cleanupBlock, localContext, Some(UnitType()))
     }
@@ -123,25 +138,25 @@ class Typechecker(program: Program) {
   private def checkResource(resource: ResourceDef): TypedResourceDef = {
     val typedCleanup = resource.cleanup.map { cleanupBlock =>
       val localContext: LocalContext = mutable.Map.empty
-      
+
       // Add all resource fields to the cleanup context as mutable owned variables
       resource.fields.foreach { case (fieldName, fieldType) =>
         validateType(fieldType)
         localContext(fieldName) = VarInfo(
-          fieldType, 
-          VarState.Owned, 
-          isMutable = true,  // All fields are mutable in cleanup
+          fieldType,
+          VarState.Owned,
+          isMutable = true, // All fields are mutable in cleanup
           resource.loc
         )
       }
-      
+
       // Check and convert the cleanup block
       checkStatement(cleanupBlock, localContext, Some(UnitType())) match {
         case block: TypedBlockStatement => block
         case other => TypedBlockStatement(List(other), cleanupBlock.loc)
       }
     }
-    
+
     TypedResourceDef(
       resource.name,
       resource.fields,
@@ -194,7 +209,7 @@ class Typechecker(program: Program) {
 
     case LetStatement(varName, isMutable, typeAnnotation, init, loc) =>
       if (context.contains(varName)) {
-        throw TypeError(
+        throw createTypeError(
           s"Variable '$varName' is already defined in this scope.",
           Some(loc)
         )
@@ -204,7 +219,7 @@ class Typechecker(program: Program) {
       typeAnnotation.foreach { declaredType =>
         validateType(declaredType)
         if (!areTypesEqual(declaredType, typedInit.typ)) {
-          throw TypeError(
+          throw createTypeError(
             s"Type mismatch for '$varName'. Expected ${typeToString(declaredType)} but got ${typeToString(typedInit.typ)}.",
             Some(init.loc)
           )
@@ -233,7 +248,7 @@ class Typechecker(program: Program) {
         checkPlaceExpression(target, context, requireMutable = true)
 
       if (!areTypesEqual(typedTarget.typ, typedValue.typ)) {
-        throw TypeError(
+        throw createTypeError(
           s"Cannot assign value of type ${typeToString(typedValue.typ)} to target of type ${typeToString(typedTarget.typ)}.",
           Some(value.loc)
         )
@@ -250,13 +265,13 @@ class Typechecker(program: Program) {
       val returnType =
         typedExprOpt.map(_.typ).getOrElse(UnitType())
       val expected = expectedReturnType.getOrElse(
-        throw TypeError(
+        throw createTypeError(
           "Return statement used outside of a function.",
           Some(loc)
         )
       )
       if (!areTypesEqual(returnType, expected)) {
-        throw TypeError(
+        throw createTypeError(
           s"Return type mismatch. Expected ${typeToString(expected)} but got ${typeToString(returnType)}.",
           exprOpt.map(_.loc).orElse(Some(loc))
         )
@@ -283,11 +298,14 @@ class Typechecker(program: Program) {
     case Variable(name, loc) =>
       val varInfo = context.getOrElse(
         name,
-        throw TypeError(s"Variable '$name' not found in this scope.", Some(loc))
+        throw createTypeError(
+          s"Variable '$name' not found in this scope.",
+          Some(loc)
+        )
       )
       varInfo.state match {
         case VarState.Moved =>
-          throw TypeError(s"Use of moved value '$name'.", Some(loc))
+          throw createTypeError(s"Use of moved value '$name'.", Some(loc))
         case _ => // OK to read from Owned, BorrowedRead, BorrowedWrite
           TypedVariable(name, varInfo.typ, loc)
       }
@@ -303,7 +321,7 @@ class Typechecker(program: Program) {
             isManagedContext = true
           )
         if (isResource) {
-          throw TypeError(
+          throw createTypeError(
             s"Resource '$typeName' cannot be allocated as managed.",
             Some(loc)
           )
@@ -336,7 +354,7 @@ class Typechecker(program: Program) {
           isManagedContext = true
         )
       if (isResource) {
-        throw TypeError(
+        throw createTypeError(
           s"Resource '$typeName' cannot be allocated as managed.",
           Some(loc)
         )
@@ -354,12 +372,12 @@ class Typechecker(program: Program) {
         case st @ StructNameType(_, _)             => (st, false)
         case ManagedType(inner: StructNameType, _) => (inner, true)
         case ManagedType(inner, _) =>
-          throw TypeError(
+          throw createTypeError(
             s"Field access on managed type is only allowed for structs. Found ${typeToString(ManagedType(inner))}",
             Some(obj.loc)
           )
         case _ =>
-          throw TypeError(
+          throw createTypeError(
             s"Field access is only allowed on structs and resources. Found type ${typeToString(typedObj.typ)}.",
             Some(obj.loc)
           )
@@ -380,7 +398,7 @@ class Typechecker(program: Program) {
       val funcName = funcExpr match {
         case Variable(name, _) => name
         case _ =>
-          throw TypeError(
+          throw createTypeError(
             "Dynamic function calls are not supported.",
             Some(funcExpr.loc)
           )
@@ -388,11 +406,14 @@ class Typechecker(program: Program) {
 
       val funcDef = globalContext.functions.getOrElse(
         funcName,
-        throw TypeError(s"Function '$funcName' not found.", Some(funcExpr.loc))
+        throw createTypeError(
+          s"Function '$funcName' not found.",
+          Some(funcExpr.loc)
+        )
       )
 
       if (args.length != funcDef.params.length) {
-        throw TypeError(
+        throw createTypeError(
           s"Function '$funcName' expects ${funcDef.params.length} arguments, but ${args.length} were provided.",
           Some(loc)
         )
@@ -402,7 +423,7 @@ class Typechecker(program: Program) {
       val typedArgs = args.zip(funcDef.params).map { case (argExpr, param) =>
         val typedArg = checkExpression(argExpr, context)
         if (!areTypesEqual(typedArg.typ, param.typ)) {
-          throw TypeError(
+          throw createTypeError(
             s"Type mismatch for argument to parameter '${param.name}'. Expected ${typeToString(
                 param.typ
               )} but got ${typeToString(typedArg.typ)}.",
@@ -435,46 +456,62 @@ class Typechecker(program: Program) {
     case BinaryExpression(left, op, right, loc) =>
       val typedLeft = checkExpression(left, context)
       val typedRight = checkExpression(right, context)
-      
+
       val resultType = op match {
         case BinaryOp.Add | BinaryOp.Sub =>
           // Arithmetic operators require both operands to be int and return int
-          if (!areTypesEqual(typedLeft.typ, IntType()) || !areTypesEqual(typedRight.typ, IntType())) {
-            throw TypeError(
-              s"Arithmetic operator ${binaryOpToString(op)} requires both operands to be int, but got ${typeToString(typedLeft.typ)} and ${typeToString(typedRight.typ)}.",
+          if (
+            !areTypesEqual(typedLeft.typ, IntType()) || !areTypesEqual(
+              typedRight.typ,
+              IntType()
+            )
+          ) {
+            throw createTypeError(
+              s"Arithmetic operator ${binaryOpToString(op)} requires both operands to be int, but got ${typeToString(
+                  typedLeft.typ
+                )} and ${typeToString(typedRight.typ)}.",
               Some(loc)
             )
           }
           IntType()
-          
+
         case BinaryOp.Lt | BinaryOp.Le | BinaryOp.Gt | BinaryOp.Ge =>
           // Comparison operators require both operands to be int and return bool
-          if (!areTypesEqual(typedLeft.typ, IntType()) || !areTypesEqual(typedRight.typ, IntType())) {
-            throw TypeError(
-              s"Comparison operator ${binaryOpToString(op)} requires both operands to be int, but got ${typeToString(typedLeft.typ)} and ${typeToString(typedRight.typ)}.",
+          if (
+            !areTypesEqual(typedLeft.typ, IntType()) || !areTypesEqual(
+              typedRight.typ,
+              IntType()
+            )
+          ) {
+            throw createTypeError(
+              s"Comparison operator ${binaryOpToString(op)} requires both operands to be int, but got ${typeToString(
+                  typedLeft.typ
+                )} and ${typeToString(typedRight.typ)}.",
               Some(loc)
             )
           }
           BoolType()
-          
+
         case BinaryOp.Eq | BinaryOp.Ne =>
           // Equality operators require both operands to be the same type and return bool
           if (!areTypesEqual(typedLeft.typ, typedRight.typ)) {
-            throw TypeError(
-              s"Equality operator ${binaryOpToString(op)} requires both operands to be the same type, but got ${typeToString(typedLeft.typ)} and ${typeToString(typedRight.typ)}.",
+            throw createTypeError(
+              s"Equality operator ${binaryOpToString(op)} requires both operands to be the same type, but got ${typeToString(
+                  typedLeft.typ
+                )} and ${typeToString(typedRight.typ)}.",
               Some(loc)
             )
           }
           // Only allow equality on copy types for simplicity
           if (!isCopyType(typedLeft.typ)) {
-            throw TypeError(
+            throw createTypeError(
               s"Equality operator ${binaryOpToString(op)} is only supported for copy types (int, bool, unit), but got ${typeToString(typedLeft.typ)}.",
               Some(loc)
             )
           }
           BoolType()
       }
-      
+
       TypedBinaryExpression(typedLeft, op, typedRight, resultType, loc)
   }
 
@@ -489,17 +526,17 @@ class Typechecker(program: Program) {
     case Variable(name, loc) =>
       val varInfo = context.getOrElse(
         name,
-        throw TypeError(s"Variable '$name' not found.", Some(loc))
+        throw createTypeError(s"Variable '$name' not found.", Some(loc))
       )
       if (requireMutable && !varInfo.isMutable) {
-        throw TypeError(
+        throw createTypeError(
           s"Cannot assign to immutable variable '$name'. Use 'let mut' to declare mutable variables or 'inout' for mutable parameters.",
           Some(loc)
         )
       }
       varInfo.state match {
         case VarState.Moved =>
-          throw TypeError(
+          throw createTypeError(
             s"Cannot use '$name' as it has been moved.",
             Some(loc)
           )
@@ -513,12 +550,12 @@ class Typechecker(program: Program) {
         case st @ StructNameType(_, _)             => (st, false)
         case ManagedType(inner: StructNameType, _) => (inner, true)
         case ManagedType(inner, _) =>
-          throw TypeError(
+          throw createTypeError(
             s"Field access on managed type is only allowed for structs. Found ${typeToString(ManagedType(inner))}",
             Some(obj.loc)
           )
         case _ =>
-          throw TypeError(
+          throw createTypeError(
             s"Field access is only allowed on structs and resources. Found type ${typeToString(typedObj.typ)}.",
             Some(obj.loc)
           )
@@ -535,7 +572,7 @@ class Typechecker(program: Program) {
       TypedFieldAccess(typedObj, fieldName, finalFieldType, loc)
 
     case _ =>
-      throw TypeError(
+      throw createTypeError(
         "Expression is not a valid assignment target.",
         Some(expr.loc)
       )
@@ -558,17 +595,17 @@ class Typechecker(program: Program) {
           case VarState.Owned =>
             context(name) = varInfo.copy(state = VarState.Moved)
           case VarState.Moved =>
-            throw TypeError(
+            throw createTypeError(
               s"Cannot move from '$name' because it was already moved.",
               Some(loc)
             )
           case VarState.BorrowedRead =>
-            throw TypeError(
+            throw createTypeError(
               s"Cannot move from '$name' because it is immutably borrowed.",
               Some(loc)
             )
           case VarState.BorrowedWrite =>
-            throw TypeError(
+            throw createTypeError(
               s"Cannot move from '$name' because it is mutably borrowed.",
               Some(loc)
             )
@@ -598,7 +635,7 @@ class Typechecker(program: Program) {
 
         if (isMutableBorrow) { // 'inout' parameter
           if (!varInfo.isMutable) {
-            throw TypeError(
+            throw createTypeError(
               s"Cannot mutably borrow immutable variable '$name'. Mark it as 'mut' or pass it to an 'inout' parameter.",
               Some(loc)
             )
@@ -606,17 +643,17 @@ class Typechecker(program: Program) {
           varInfo.state match {
             case VarState.Owned => // OK
             case VarState.Moved =>
-              throw TypeError(
+              throw createTypeError(
                 s"Cannot mutably borrow '$name' as it has been moved.",
                 Some(loc)
               )
             case VarState.BorrowedRead =>
-              throw TypeError(
+              throw createTypeError(
                 s"Cannot mutably borrow '$name' as it is already immutably borrowed.",
                 Some(loc)
               )
             case VarState.BorrowedWrite =>
-              throw TypeError(
+              throw createTypeError(
                 s"Cannot mutably borrow '$name' as it is already mutably borrowed.",
                 Some(loc)
               )
@@ -625,12 +662,12 @@ class Typechecker(program: Program) {
           varInfo.state match {
             case VarState.Owned | VarState.BorrowedRead => // OK
             case VarState.Moved =>
-              throw TypeError(
+              throw createTypeError(
                 s"Cannot borrow '$name' as it has been moved.",
                 Some(loc)
               )
             case VarState.BorrowedWrite =>
-              throw TypeError(
+              throw createTypeError(
                 s"Cannot immutably borrow '$name' as it is already mutably borrowed.",
                 Some(loc)
               )
@@ -641,7 +678,7 @@ class Typechecker(program: Program) {
         // This is a simplification; a real borrow checker would track borrows per-field.
         checkBorrow(obj, context, isMutableBorrow)
       case _ =>
-        throw TypeError(
+        throw createTypeError(
           "Cannot borrow from a temporary value.",
           Some(argExpr.loc)
         )
@@ -662,7 +699,10 @@ class Typechecker(program: Program) {
         .map(Left(_))
         .orElse(globalContext.resources.get(typeName).map(Right(_)))
         .getOrElse(
-          throw TypeError(s"Unknown struct or resource '$typeName'.", Some(loc))
+          throw createTypeError(
+            s"Unknown struct or resource '$typeName'.",
+            Some(loc)
+          )
         )
 
     val (expectedFieldsList, isResource) = definition match {
@@ -673,7 +713,7 @@ class Typechecker(program: Program) {
     val providedFields = values.map(_._1).toSet
     val expectedFields = expectedFieldsList.map(_._1).toSet
     if (providedFields != expectedFields) {
-      throw TypeError(
+      throw createTypeError(
         s"'$typeName' initialization has incorrect fields. Expected: ${expectedFields
             .mkString(", ")}, Got: ${providedFields.mkString(", ")}.",
         Some(loc)
@@ -692,7 +732,7 @@ class Typechecker(program: Program) {
         }
 
       if (!areTypesEqual(typedFieldExpr.typ, finalExpectedType)) {
-        throw TypeError(
+        throw createTypeError(
           s"Type mismatch for field '$fieldName' in '$typeName' initialization. Expected ${typeToString(
               finalExpectedType
             )} but got ${typeToString(typedFieldExpr.typ)}.",
@@ -730,7 +770,7 @@ class Typechecker(program: Program) {
     fields.find(_._1 == fieldName) match {
       case Some((_, fieldType)) => fieldType
       case None =>
-        throw TypeError(
+        throw createTypeError(
           s"Type '$structName' has no field named '$fieldName'.",
           Some(loc)
         )
@@ -753,7 +793,7 @@ class Typechecker(program: Program) {
         !globalContext.structs.contains(name) && !globalContext.resources
           .contains(name)
       ) {
-        throw TypeError(s"Unknown type '$name'.", loc)
+        throw createTypeError(s"Unknown type '$name'.", loc)
       }
     case ManagedType(inner, _) => validateType(inner)
     case _                     => // Primitive types are always valid
@@ -781,7 +821,8 @@ class Typechecker(program: Program) {
   /** Determines if a type is a simple "Copy" type (like primitives). */
   private def isCopyType(t: Type): Boolean = t match {
     case IntType(_) | BoolType(_) | UnitType(_) => true
-    case ManagedType(_, _) => true // Managed types are handles that can be copied
+    case ManagedType(_, _) =>
+      true // Managed types are handles that can be copied
     case _ => false // Structs, Resources are Move types
   }
 
@@ -789,11 +830,11 @@ class Typechecker(program: Program) {
   private def binaryOpToString(op: BinaryOp): String = op match {
     case BinaryOp.Add => "+"
     case BinaryOp.Sub => "-"
-    case BinaryOp.Lt => "<"
-    case BinaryOp.Le => "<="
-    case BinaryOp.Gt => ">"
-    case BinaryOp.Ge => ">="
-    case BinaryOp.Eq => "=="
-    case BinaryOp.Ne => "!="
+    case BinaryOp.Lt  => "<"
+    case BinaryOp.Le  => "<="
+    case BinaryOp.Gt  => ">"
+    case BinaryOp.Ge  => ">="
+    case BinaryOp.Eq  => "=="
+    case BinaryOp.Ne  => "!="
   }
 }

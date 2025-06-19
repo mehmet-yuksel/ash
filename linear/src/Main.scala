@@ -77,7 +77,7 @@ fn main() -> unit {
       val languageParser = new LanguageParser(testCode)
       val programAst = languageParser.parseProgram()
       println("Successfully parsed managed types!")
-      val typechecker = new Typechecker(programAst)
+      val typechecker = new Typechecker(programAst, testCode)
       val typedProgram = typechecker.check()
 
       val codegen = new CppCodeGenerator(typedProgram)
