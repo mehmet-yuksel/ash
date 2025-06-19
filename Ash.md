@@ -46,10 +46,10 @@ fn main() -> unit {
   let p2 = p1;
 
   // This line would cause a compile error because p1 no longer owns the data.
-  // print_int(p1.x); // ERROR: use of moved value 'p1'
+  // println!("{}", p1.x); // ERROR: use of moved value 'p1'
 
   // p2 is the current owner.
-  print_int(p2.x); // OK
+  println!("{}", p2.x); // OK
 }
 ```
 
@@ -75,7 +75,7 @@ fn main() -> unit {
   // Modifying the data through one handle is visible through all other handles.
   config2.retries = 5;
 
-  print_int(config1.retries); // Prints 5
+  println!("{}", config1.retries); // Prints 5
 }
 ```
 
@@ -101,7 +101,7 @@ fn main() -> unit {
   let another_bar_handle = bar_handle;
   another_bar_handle.value = 99;
 
-  print_int(foo.bar.value); // Prints 99
+  println!("{}", foo.bar.value); // Prints 99
 
   // This would be a compile error because you cannot move data out of the managed boundary.
   // let b: Bar = foo.bar; // ERROR: cannot move out of managed context
@@ -168,14 +168,14 @@ A `ref` parameter provides read-only access to a value. The caller retains owner
 
 ```ash
 fn inspect_point(pt: ref Point) -> unit {
-  print_int(pt.x);
+  println!("{}", pt.x);
   // pt.x = 100; // ERROR: cannot modify through an immutable reference
 }
 
 fn main() -> unit {
   let p = Point { x: 10, y: 20 };
   inspect_point(p); // Pass an immutable borrow of p.
-  print_int(p.x);   // OK, p is still owned and valid.
+  println!("{}", p.x);   // OK, p is still owned and valid.
 }
 ```
 
@@ -191,7 +191,7 @@ fn translate(pt: inout Point) -> unit {
 fn main() -> unit {
   let mut p = Point { x: 10, y: 20 };
   translate(p);      // Pass a mutable borrow of p.
-  print_int(p.x);    // Prints 11
+  "{}", p.x);    // Prints 11
 }
 ```
 
