@@ -36,6 +36,12 @@ enum ParamMode:
   case Ref // Immutable borrow
   case Inout // Mutable borrow (exclusive borrow)
 
+// Binary Operators
+enum BinaryOp:
+  case Add, Sub // Arithmetic: +, -
+  case Lt, Le, Gt, Ge // Comparison: <, <=, >, >=
+  case Eq, Ne // Equality: ==, !=
+
 // --- Definitions ---
 // Represents a struct definition: struct Point { x: int, y: int }
 case class StructDef(
@@ -125,6 +131,13 @@ case class FunctionCall(
 case class PrintlnExpression(
     formatString: String,
     args: List[Expression],
+    loc: SourceLocation
+) extends Expression
+// Binary expression: left op right
+case class BinaryExpression(
+    left: Expression,
+    op: BinaryOp,
+    right: Expression,
     loc: SourceLocation
 ) extends Expression
 

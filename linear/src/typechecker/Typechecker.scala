@@ -431,6 +431,51 @@ class Typechecker(program: Program) {
       val typedArgs = args.map(checkExpression(_, context))
       // println! always returns unit
       TypedPrintlnExpression(formatString, typedArgs, UnitType(), loc)
+
+    case BinaryExpression(left, op, right, loc) =>
+      val typedLeft = checkExpression(left, context)
+      val typedRight = checkExpression(right, context)
+      
+      val resultType = op match {
+        case BinaryOp.Add | BinaryOp.Sub =>
+          // Arithmetic operators require both operands to be int and return int
+          if (!areTypesEqual(typedLeft.typ, IntType()) || !areTypesEqual(typedRight.typ, IntType())) {
+            throw TypeError(
+              s"Arithmetic operator ${binaryOpToString(op)} requires both operands to be int, but got ${typeToString(typedLeft.typ)} and ${typeToString(typedRight.typ)}.",
+              Some(loc)
+            )
+          }
+          IntType()
+          
+        case BinaryOp.Lt | BinaryOp.Le | BinaryOp.Gt | BinaryOp.Ge =>
+          // Comparison operators require both operands to be int and return bool
+          if (!areTypesEqual(typedLeft.typ, IntType()) || !areTypesEqual(typedRight.typ, IntType())) {
+            throw TypeError(
+              s"Comparison operator ${binaryOpToString(op)} requires both operands to be int, but got ${typeToString(typedLeft.typ)} and ${typeToString(typedRight.typ)}.",
+              Some(loc)
+            )
+          }
+          BoolType()
+          
+        case BinaryOp.Eq | BinaryOp.Ne =>
+          // Equality operators require both operands to be the same type and return bool
+          if (!areTypesEqual(typedLeft.typ, typedRight.typ)) {
+            throw TypeError(
+              s"Equality operator ${binaryOpToString(op)} requires both operands to be the same type, but got ${typeToString(typedLeft.typ)} and ${typeToString(typedRight.typ)}.",
+              Some(loc)
+            )
+          }
+          // Only allow equality on copy types for simplicity
+          if (!isCopyType(typedLeft.typ)) {
+            throw TypeError(
+              s"Equality operator ${binaryOpToString(op)} is only supported for copy types (int, bool, unit), but got ${typeToString(typedLeft.typ)}.",
+              Some(loc)
+            )
+          }
+          BoolType()
+      }
+      
+      TypedBinaryExpression(typedLeft, op, typedRight, resultType, loc)
   }
 
   /** Checks if an expression is a valid "place" (l-value) for assignment or
@@ -738,5 +783,17 @@ class Typechecker(program: Program) {
     case IntType(_) | BoolType(_) | UnitType(_) => true
     case ManagedType(_, _) => true // Managed types are handles that can be copied
     case _ => false // Structs, Resources are Move types
+  }
+
+  /** Converts a BinaryOp to a string for error messages. */
+  private def binaryOpToString(op: BinaryOp): String = op match {
+    case BinaryOp.Add => "+"
+    case BinaryOp.Sub => "-"
+    case BinaryOp.Lt => "<"
+    case BinaryOp.Le => "<="
+    case BinaryOp.Gt => ">"
+    case BinaryOp.Ge => ">="
+    case BinaryOp.Eq => "=="
+    case BinaryOp.Ne => "!="
   }
 }

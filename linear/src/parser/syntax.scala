@@ -66,7 +66,16 @@ class LanguageParser(input: String) {
     .token("SEMICOLON", ";")
     .token("ARROW", "->")
     .token("EQUALS", "=")
-  // Add other operators like +, -, *, /, ==, !=, <, >, etc.
+    // Arithmetic operators
+    .token("PLUS", "\\+")
+    .token("MINUS", "-")
+    // Comparison operators
+    .token("EQ", "==")
+    .token("NE", "!=")
+    .token("LE", "<=")
+    .token("GE", ">=")
+    .token("LT", "<")
+    .token("GT", ">")
 
   private val parser = new Parser[Expression](input, lexer)
 
@@ -86,9 +95,16 @@ class LanguageParser(input: String) {
   parser
     .infix("LPAREN", Precedence.CALL, parseFunctionCall) // e.g. foo()
     .infix("DOT", Precedence.CALL, parseFieldAccess) // e.g. obj.field
-  // Add other infix operators here:
-  // .infix("PLUS", Precedence.TERM, parseBinaryOperator)
-  // .infix("EQUALS", Precedence.ASSIGNMENT, parseAssignmentExpression) // If assignment is an expression
+    // Arithmetic operators
+    .infix("PLUS", Precedence.TERM, parseBinaryOperator)
+    .infix("MINUS", Precedence.TERM, parseBinaryOperator)
+    // Comparison operators
+    .infix("EQ", Precedence.EQUALITY, parseBinaryOperator)
+    .infix("NE", Precedence.EQUALITY, parseBinaryOperator)
+    .infix("LT", Precedence.COMPARISON, parseBinaryOperator)
+    .infix("LE", Precedence.COMPARISON, parseBinaryOperator)
+    .infix("GT", Precedence.COMPARISON, parseBinaryOperator)
+    .infix("GE", Precedence.COMPARISON, parseBinaryOperator)
 
   // --- Expression Parsing Methods ---
   private def parseIdentifier(
@@ -279,6 +295,44 @@ class LanguageParser(input: String) {
       fieldNameToken.loc.endPosition
     )
     FieldAccess(left, fieldNameToken.lexeme, loc)
+  }
+
+  private def parseBinaryOperator(
+      p: Parser[Expression],
+      left: Expression,
+      token: Token
+  ): Expression = {
+    val op = token.typ match {
+      case "PLUS"  => BinaryOp.Add
+      case "MINUS" => BinaryOp.Sub
+      case "EQ"    => BinaryOp.Eq
+      case "NE"    => BinaryOp.Ne
+      case "LT"    => BinaryOp.Lt
+      case "LE"    => BinaryOp.Le
+      case "GT"    => BinaryOp.Gt
+      case "GE"    => BinaryOp.Ge
+      case _ => 
+        val preview = ErrorUtils.generateErrorPreview(input, token.loc)
+        throw new ParserError(
+          s"Unknown binary operator: '${token.lexeme}' at line ${token.loc.line}, column ${token.loc.column}\n$preview"
+        )
+    }
+    
+    val precedence = token.typ match {
+      case "PLUS" | "MINUS" => Precedence.TERM
+      case "EQ" | "NE" => Precedence.EQUALITY
+      case "LT" | "LE" | "GT" | "GE" => Precedence.COMPARISON
+      case _ => Precedence.LOWEST
+    }
+    
+    val right = p.parseExpression(precedence)
+    val loc = SourceLocation(
+      left.loc.line,
+      left.loc.column,
+      left.loc.startPosition,
+      right.loc.endPosition
+    )
+    BinaryExpression(left, op, right, loc)
   }
 
   // --- Type Parsing ---

@@ -328,5 +328,19 @@ class CppCodeGenerator(program: TypedProgram) {
       } else {
         s"std::println(\"$formatString\")"
       }
+    case TypedBinaryExpression(left, op, right, _, _) =>
+      val leftExpr = generateExpression(left)
+      val rightExpr = generateExpression(right)
+      val opStr = op match {
+        case BinaryOp.Add => "+"
+        case BinaryOp.Sub => "-"
+        case BinaryOp.Lt => "<"
+        case BinaryOp.Le => "<="
+        case BinaryOp.Gt => ">"
+        case BinaryOp.Ge => ">="
+        case BinaryOp.Eq => "=="
+        case BinaryOp.Ne => "!="
+      }
+      s"($leftExpr $opStr $rightExpr)"
   }
 }

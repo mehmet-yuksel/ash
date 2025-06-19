@@ -34,7 +34,20 @@ fn print_point(p: managed Point) -> unit {
 }
 
 fn translate(pt: mut managed Point) -> unit {
-  pt.x = pt.x;
+  pt.x = pt.x + 5;
+  pt.y = pt.y - 3;
+}
+
+fn compare_points(p1: managed Point, p2: managed Point) -> unit {
+  let same_x = p1.x == p2.x;
+  let different_y = p1.y != p2.y;
+  let x_greater = p1.x > p2.x;
+  let y_less_equal = p1.y <= p2.y;
+  
+  println!("Same X: {}", same_x);
+  println!("Different Y: {}", different_y);
+  println!("X greater: {}", x_greater);
+  println!("Y less or equal: {}", y_less_equal);
 }
 
 fn main() -> unit {
@@ -44,6 +57,19 @@ fn main() -> unit {
   translate(p2);
   print_point(p1);
   print_point(p2);
+  
+  println!("Comparing points:");
+  compare_points(p1, p2);
+  
+  let sum = 15 + 25;
+  let diff = 30 - 10;
+  let is_equal = sum == 40;
+  let is_greater = diff >= 20;
+  
+  println!("Sum: {}, Diff: {}", sum, diff);
+  println!("Sum equals 40: {}", is_equal);
+  println!("Diff >= 20: {}", is_greater);
+  
   println!("Program finished!");
 }
 """
