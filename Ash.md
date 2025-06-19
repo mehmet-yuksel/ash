@@ -191,7 +191,7 @@ fn translate(pt: inout Point) -> unit {
 fn main() -> unit {
   let mut p = Point { x: 10, y: 20 };
   translate(p);      // Pass a mutable borrow of p.
-  "{}", p.x);    // Prints 11
+  println!("{}", p.x);    // Prints 11
 }
 ```
 
