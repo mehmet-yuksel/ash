@@ -110,7 +110,11 @@ object IntegrationTests extends TestSuite {
       }
 
       // 5. Assert that the actual output matches the expected output
-      assert(runOutput.trim == expectedOutput.stripMargin.trim)
+      assert(
+        runOutput
+          .replaceAll("\r\n", "\n")
+          .trim == expectedOutput.stripMargin.trim
+      )
     }
   }
 
