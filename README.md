@@ -41,7 +41,7 @@ This hybrid approach allows developers to write high-performance, resource-criti
 
 ### Example: Linear vs. Managed Types
 
-```ash
+```rust
 // A standard linear type with move semantics.
 struct Point {
   x: int,
@@ -86,7 +86,7 @@ Follow these steps to write, compile, and run an Ash program.
 
 Create a file named `hello.ash` with the following content:
 
-```ash
+```rust
 // hello.ash
 fn main() -> unit {
   println!("Hello from Ash!");
@@ -161,7 +161,7 @@ This is the default behavior in Ash. Linear types live on the stack and have a s
 
 When a linear type is assigned to a new variable or passed to a function, its ownership is **moved**. The original variable can no longer be used.
 
-```ash
+```rust
 struct Point {
   x: int,
   y: int
@@ -188,7 +188,7 @@ For data with complex lifetimes or that needs to be shared, you can choose to al
 
 A variable of a `managed` type is a lightweight **handle** (or reference) to the data on the heap. Handles are cheap to copy, and multiple handles can point to the same data. The data will be kept alive as long as at least one handle to it exists.
 
-```ash
+```rust
 struct SharedConfig {
   api_key: int,
   retries: int
@@ -213,7 +213,7 @@ fn main() -> unit {
 1.  **Propagation:** The `managed` property propagates downwards. Accessing a field of a `managed` object gives you a `managed` handle to that field. Similarly, any nested structs initialized within a `managed` context are also automatically allocated on the heap.
 2.  **Immovability:** You cannot move any value out from within this boundary. This ensures the integrity of the shared data structure.
 
-```ash
+```rust
 struct Bar { value: int }
 struct Foo { bar: Bar }
 
@@ -243,7 +243,7 @@ Some types, like file handles, network sockets, or mutex locks, require immediat
 
 A `resource` behaves like a linear `struct` (it has a single owner and is moved), but with one critical guarantee: **a `resource` can never be allocated on the garbage-collected heap.** This prevents its lifetime from being indeterminately extended, ensuring that cleanup happens exactly when it goes out of scope.
 
-```ash
+```rust
 resource File {
   descriptor: int
 
@@ -265,7 +265,7 @@ fn main() -> unit {
 
 In Ash, immutability is the default. To mutate a value, its binding must be explicitly marked with `mut`. This applies to local variables and function parameters that take ownership.
 
-```ash
+```rust
 fn takes_ownership_and_mutates(pt: mut Point) -> unit {
   pt.x = 100; // OK, because the 'pt' binding is mutable.
 }
@@ -280,7 +280,7 @@ fn main() -> unit {
 
 A function that takes an owned parameter without `mut` cannot modify it.
 
-```ash
+```rust
 fn takes_ownership(pt: Point) -> unit {
   // This would be a compile error.
   // pt.x = 100; // ERROR: cannot assign to immutable binding 'pt'
@@ -295,7 +295,7 @@ To access data without taking ownership, Ash uses temporary borrows passed as fu
 
 A `ref` parameter provides read-only access to a value. The caller retains ownership of the original data.
 
-```ash
+```rust
 fn inspect_point(pt: ref Point) -> unit {
   println!("{}", pt.x);
   // pt.x = 100; // ERROR: cannot modify through an immutable reference
@@ -312,7 +312,7 @@ fn main() -> unit {
 
 An `inout` parameter provides read-write access to a value. The caller must provide a mutable variable.
 
-```ash
+```rust
 fn translate(pt: inout Point) -> unit {
   pt.x = pt.x + 1;
 }
