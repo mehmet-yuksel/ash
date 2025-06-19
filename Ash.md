@@ -176,9 +176,6 @@ fn main() -> unit {
   let p = Point { x: 10, y: 20 };
   inspect_point(p); // Pass an immutable borrow of p.
   print_int(p.x);   // OK, p is still owned and valid.
-
-  let managed_p: managed Point = managed Point { x: 30, y: 40 };
-  inspect_point(managed_p); // Borrows work with managed types too.
 }
 ```
 
@@ -195,10 +192,6 @@ fn main() -> unit {
   let mut p = Point { x: 10, y: 20 };
   translate(p);      // Pass a mutable borrow of p.
   print_int(p.x);    // Prints 11
-
-  let managed_p: managed Point = managed Point { x: 30, y: 40 };
-  translate(managed_p); // The data on the heap is modified.
-  print_int(managed_p.x); // Prints 31
 }
 ```
 
