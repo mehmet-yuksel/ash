@@ -21,7 +21,7 @@ object Main {
 
     val sourceFile = args(0)
     val sourcePath = Paths.get(sourceFile)
-    
+
     if (!Files.exists(sourcePath)) {
       println(s"Error: File '$sourceFile' not found")
       System.exit(1)
@@ -29,11 +29,10 @@ object Main {
 
     val sourceCode = new String(Files.readAllBytes(sourcePath), "UTF-8")
     val outputFile = sourceFile.replaceAll("\\.[^.]*$", ".cpp")
-    
+
     try {
       val languageParser = new LanguageParser(sourceCode)
       val programAst = languageParser.parseProgram()
-      println(s"Successfully parsed $sourceFile!")
       val typechecker = new Typechecker(programAst, sourceCode)
       val typedProgram = typechecker.check()
 
