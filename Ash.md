@@ -117,6 +117,10 @@ A `resource` behaves like a linear `struct` (it has a single owner and is moved)
 ```ash
 resource File {
   descriptor: int
+
+  cleanup {
+    println!("Closing the file with descriptor: {}", descriptor);
+  }
 }
 
 fn main() -> unit {
