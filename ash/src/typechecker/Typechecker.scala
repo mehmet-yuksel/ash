@@ -1,8 +1,8 @@
-package linear.typechecker
+package ash.typechecker
 
-import linear.parser._
-import linear.parser.ErrorUtils
-import linear.typechecker.typed._
+import ash.parser._
+import ash.parser.ErrorUtils
+import ash.typechecker.typed._
 
 import scala.collection.mutable
 

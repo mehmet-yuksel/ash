@@ -1,4 +1,4 @@
-# Linear - Scala 3 with Mill
+# Ash - Scala 3 with Mill
 
 A Scala 3 project using Mill build tool.
 
@@ -15,10 +15,10 @@ scoop install mill
 
 ### Available Commands
 
-- `mill linear.compile` - Compile the project
-- `mill linear.run` - Run the main application
-- `mill linear.test` - Run tests
-- `mill linear.console` - Start Scala REPL with project classpath
+- `mill ash.compile` - Compile the project
+- `mill ash.run` - Run the main application
+- `mill ash.test` - Run tests
+- `mill ash.console` - Start Scala REPL with project classpath
 - `mill clean` - Clean build artifacts
 
 ### Project Structure

@@ -1,7 +1,7 @@
-package linear.typechecker.typed
+package ash.typechecker.typed
 
-import linear.parser.SourceLocation
-import linear.parser._
+import ash.parser.SourceLocation
+import ash.parser._
 
 // --- Typed Expressions ---
 sealed trait TypedExpression {

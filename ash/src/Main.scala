@@ -1,4 +1,4 @@
-package linear
+package ash
 
 import parser.{
   ExpressionStatement,
@@ -7,9 +7,9 @@ import parser.{
   LexerError,
   LanguageParser
 }
-import linear.typechecker.Typechecker
-import linear.typechecker.TypeError
-import linear.codegen.CppCodeGenerator
+import ash.typechecker.Typechecker
+import ash.typechecker.TypeError
+import ash.codegen.CppCodeGenerator
 import java.nio.file.{Files, Paths}
 
 object Main {

@@ -1,7 +1,7 @@
-package linear.codegen
+package ash.codegen
 
-import linear.parser._
-import linear.typechecker.typed._
+import ash.parser._
+import ash.typechecker.typed._
 
 import scala.collection.mutable
 

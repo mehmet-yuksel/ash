@@ -1,6 +1,6 @@
-package linear.parser
+package ash.parser
 
-import linear.parser.SourceLocation
+import ash.parser.SourceLocation
 
 // --- Core Types ---
 sealed trait Type {

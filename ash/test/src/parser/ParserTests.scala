@@ -1,7 +1,7 @@
-package linear.parser
+package ash.parser
 
 import utest._
-import linear.parser._
+import ash.parser._
 
 object ParserTests extends utest.TestSuite {
   def tests = Tests {

@@ -1,6 +1,6 @@
 import mill._, scalalib._
 
-object linear extends ScalaModule {
+object ash extends ScalaModule {
   def scalaVersion = "3.3.1"
 
   object test extends ScalaTests {
