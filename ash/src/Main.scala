@@ -14,76 +14,34 @@ import java.nio.file.{Files, Paths}
 
 object Main {
   def main(args: Array[String]): Unit = {
-    val testCode = """
-struct Point {
-  x: int,
-  y: int
-}
+    if (args.length != 1) {
+      println("Usage: ash <source-file>")
+      System.exit(1)
+    }
 
-resource File {
-  fd: int
+    val sourceFile = args(0)
+    val sourcePath = Paths.get(sourceFile)
+    
+    if (!Files.exists(sourcePath)) {
+      println(s"Error: File '$sourceFile' not found")
+      System.exit(1)
+    }
 
-  cleanup {
-    println!("Closing file descriptor: {}", fd);
-  }
-}
-
-
-fn print_point(p: managed Point) -> unit {
-  println!("Point(x: {}, y: {})", p.x, p.y);
-}
-
-fn translate(pt: mut managed Point) -> unit {
-  pt.x = pt.x + 5;
-  pt.y = pt.y - 3;
-}
-
-fn compare_points(p1: managed Point, p2: managed Point) -> unit {
-  let same_x = p1.x == p2.x;
-  let different_y = p1.y != p2.y;
-  let x_greater = p1.x > p2.x;
-  let y_less_equal = p1.y <= p2.y;
-  
-  println!("Same X: {}", same_x);
-  println!("Different Y: {}", different_y);
-  println!("X greater: {}", x_greater);
-  println!("Y less or equal: {}", y_less_equal);
-}
-
-fn main() -> unit {
-  println!("Starting program...");
-  let p1: managed Point = managed Point { x: 10, y: 20 };
-  let p2 = p1; // Handle is copied, not moved
-  translate(p2);
-  print_point(p1);
-  print_point(p2);
-  
-  println!("Comparing points:");
-  compare_points(p1, p2);
-  
-  let sum = 15 + 25;
-  let diff = 30 - 10;
-  let is_equal = sum == 40;
-  let is_greater = diff >= 20;
-  
-  println!("Sum: {}, Diff: {}", sum, diff);
-  println!("Sum equals 40: {}", is_equal);
-  println!("Diff >= 20: {}", is_greater);
-  
-  println!("Program finished!");
-}
-"""
+    val sourceCode = new String(Files.readAllBytes(sourcePath), "UTF-8")
+    val outputFile = sourceFile.replaceAll("\\.[^.]*$", ".cpp")
+    
     try {
-      val languageParser = new LanguageParser(testCode)
+      val languageParser = new LanguageParser(sourceCode)
       val programAst = languageParser.parseProgram()
-      println("Successfully parsed managed types!")
-      val typechecker = new Typechecker(programAst, testCode)
+      println(s"Successfully parsed $sourceFile!")
+      val typechecker = new Typechecker(programAst, sourceCode)
       val typedProgram = typechecker.check()
 
       val codegen = new CppCodeGenerator(typedProgram)
       val cppCode = codegen.generate()
-      val path = Paths.get("program.cpp")
-      Files.write(path, cppCode.getBytes("UTF-8"))
+      val outputPath = Paths.get(outputFile)
+      Files.write(outputPath, cppCode.getBytes("UTF-8"))
+      println(s"Generated $outputFile")
 
     } catch {
       case e: LexerError =>
