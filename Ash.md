@@ -194,14 +194,3 @@ fn main() -> unit {
   println!("{}", p.x);    // Prints 11
 }
 ```
-
-## 6. Summary of Interactions
-
-The power of Ash comes from how these concepts work together seamlessly.
-
-| If a function needs...          | ...its parameter should be: | Can be called with:         | Caller retains ownership? |
-| :------------------------------ | :-------------------------- | :-------------------------- | :------------------------ |
-| To consume a value              | `p: Point`                  | A linear `Point`            | No (value is moved)       |
-| To share ownership of GC'd data | `p: managed Point`          | A `managed Point` handle    | Yes (handle is copied)    |
-| Read-only access                | `p: ref Point`              | A linear or managed `Point` | Yes (value is borrowed)   |
-| Read-write access               | `p: inout Point`            | A linear or managed `Point` | Yes (value is borrowed)   |
