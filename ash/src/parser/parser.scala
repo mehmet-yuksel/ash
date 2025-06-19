@@ -1,4 +1,4 @@
-package linear.parser
+package ash.parser
 
 import scala.util.matching.Regex
 import scala.collection.mutable.ArrayBuffer

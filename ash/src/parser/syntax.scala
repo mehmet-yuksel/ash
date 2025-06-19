@@ -1,6 +1,6 @@
-package linear.parser
+package ash.parser
 
-import linear._ // Your AST definitions
+import ash._ // Your AST definitions
 import scala.collection.mutable.ListBuffer
 
 object Precedence {

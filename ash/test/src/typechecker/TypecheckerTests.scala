@@ -1,7 +1,7 @@
-package linear.typechecker
+package ash.typechecker
 
 import utest._
-import linear.parser
+import ash.parser
 
 object TypecheckerTests extends utest.TestSuite {
   def tests = Tests {

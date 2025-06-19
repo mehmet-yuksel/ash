@@ -1,13 +1,13 @@
-package linear
+package ash
 
 import utest._
 import scala.sys.process._
 import java.io.File
 import java.nio.file.{Files, Paths}
 import scala.util.{Try, Success, Failure}
-import linear.parser.LanguageParser
-import linear.typechecker.Typechecker
-import linear.codegen.CppCodeGenerator
+import ash.parser.LanguageParser
+import ash.typechecker.Typechecker
+import ash.codegen.CppCodeGenerator
 
 object IntegrationTests extends TestSuite {
 
