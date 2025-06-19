@@ -25,7 +25,7 @@ object TypecheckerTests extends utest.TestSuite {
       """
         val languageParser = new parser.LanguageParser(code)
         val programAst = languageParser.parseProgram()
-        val typechecker = new Typechecker(programAst)
+        val typechecker = new Typechecker(programAst, code)
         val typedProgram = typechecker.check()
         assert(true)
       }
@@ -45,7 +45,7 @@ object TypecheckerTests extends utest.TestSuite {
       """
           val languageParser = new parser.LanguageParser(code)
           val programAst = languageParser.parseProgram()
-          val typechecker = new Typechecker(programAst)
+          val typechecker = new Typechecker(programAst, code)
           val typedProgram = typechecker.check()
         }
         assert(
@@ -71,7 +71,7 @@ object TypecheckerTests extends utest.TestSuite {
       """
           val languageParser = new parser.LanguageParser(code)
           val programAst = languageParser.parseProgram()
-          val typechecker = new Typechecker(programAst)
+          val typechecker = new Typechecker(programAst, code)
           val typedProgram = typechecker.check()
         }
         assert(
@@ -98,7 +98,7 @@ object TypecheckerTests extends utest.TestSuite {
       """
         val languageParser = new parser.LanguageParser(code)
         val programAst = languageParser.parseProgram()
-        val typechecker = new Typechecker(programAst)
+        val typechecker = new Typechecker(programAst, code)
         val typedProgram = typechecker.check()
         assert(true)
       }
@@ -125,7 +125,7 @@ object TypecheckerTests extends utest.TestSuite {
       """
           val languageParser = new parser.LanguageParser(code)
           val programAst = languageParser.parseProgram()
-          val typechecker = new Typechecker(programAst)
+          val typechecker = new Typechecker(programAst, code)
           val typedProgram = typechecker.check()
         }
         assert(
@@ -152,7 +152,7 @@ object TypecheckerTests extends utest.TestSuite {
       """
         val languageParser = new parser.LanguageParser(code)
         val programAst = languageParser.parseProgram()
-        val typechecker = new Typechecker(programAst)
+        val typechecker = new Typechecker(programAst, code)
         val typedProgram = typechecker.check()
         assert(true)
       }
@@ -175,7 +175,7 @@ object TypecheckerTests extends utest.TestSuite {
       """
           val languageParser = new parser.LanguageParser(code)
           val programAst = languageParser.parseProgram()
-          val typechecker = new Typechecker(programAst)
+          val typechecker = new Typechecker(programAst, code)
           val typedProgram = typechecker.check()
         }
         assert(
@@ -195,7 +195,7 @@ object TypecheckerTests extends utest.TestSuite {
         """
         val languageParser = new parser.LanguageParser(code)
         val programAst = languageParser.parseProgram()
-        val typechecker = new Typechecker(programAst)
+        val typechecker = new Typechecker(programAst, code)
         val typedProgram = typechecker.check()
         assert(true)
       }
@@ -213,11 +213,11 @@ object TypecheckerTests extends utest.TestSuite {
         val e = intercept[TypeError] {
           val languageParser = new parser.LanguageParser(code)
           val programAst = languageParser.parseProgram()
-          val typechecker = new Typechecker(programAst)
+          val typechecker = new Typechecker(programAst, code)
           typechecker.check()
         }
         assert(
-          e.getMessage == "Type mismatch for 'c'. Expected Bar but got managed Bar."
+          e.getMessage.contains("Type mismatch for 'c'. Expected Bar but got managed Bar.")
         )
       }
 
@@ -232,7 +232,7 @@ object TypecheckerTests extends utest.TestSuite {
         """
         val languageParser = new parser.LanguageParser(code)
         val programAst = languageParser.parseProgram()
-        val typechecker = new Typechecker(programAst)
+        val typechecker = new Typechecker(programAst, code)
         val typedProgram = typechecker.check()
         assert(true)
       }
@@ -249,11 +249,11 @@ object TypecheckerTests extends utest.TestSuite {
         val e = intercept[TypeError] {
           val languageParser = new parser.LanguageParser(code)
           val programAst = languageParser.parseProgram()
-          val typechecker = new Typechecker(programAst)
+          val typechecker = new Typechecker(programAst, code)
           typechecker.check()
         }
         assert(
-          e.getMessage == "Type mismatch for field 'bar' in 'Foo' initialization. Expected managed Bar but got Bar."
+          e.getMessage.contains("Type mismatch for field 'bar' in 'Foo' initialization. Expected managed Bar but got Bar.")
         )
       }
     }
@@ -278,7 +278,7 @@ object TypecheckerTests extends utest.TestSuite {
         """
         val languageParser = new parser.LanguageParser(code)
         val programAst = languageParser.parseProgram()
-        val typechecker = new Typechecker(programAst)
+        val typechecker = new Typechecker(programAst, code)
         val typedProgram = typechecker.check()
         assert(true)
       }
@@ -304,7 +304,7 @@ object TypecheckerTests extends utest.TestSuite {
         """
         val languageParser = new parser.LanguageParser(code)
         val programAst = languageParser.parseProgram()
-        val typechecker = new Typechecker(programAst)
+        val typechecker = new Typechecker(programAst, code)
         val typedProgram = typechecker.check()
         assert(true)
       }
@@ -330,7 +330,7 @@ object TypecheckerTests extends utest.TestSuite {
         """
           val languageParser = new parser.LanguageParser(code)
           val programAst = languageParser.parseProgram()
-          val typechecker = new Typechecker(programAst)
+          val typechecker = new Typechecker(programAst, code)
           val typedProgram = typechecker.check()
         }
         assert(
@@ -359,7 +359,7 @@ object TypecheckerTests extends utest.TestSuite {
         """
           val languageParser = new parser.LanguageParser(code)
           val programAst = languageParser.parseProgram()
-          val typechecker = new Typechecker(programAst)
+          val typechecker = new Typechecker(programAst, code)
           val typedProgram = typechecker.check()
         }
         assert(
