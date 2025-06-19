@@ -21,19 +21,7 @@ scoop install mill
 - `mill ash.console` - Start Scala REPL with project classpath
 - `mill clean` - Clean build artifacts
 
-### Project Structure
-
-```
-.
-├── build.sc              # Mill build definition
-├── src/                  # Main source files
-│   └── Main.scala
-└── test/                 # Test source files
-    └── src/
-        └── MainTest.scala
-```
-
 ## Dependencies
 
 - Scala 3.3.1
-- MUnit 0.7.29 (for testing)
+- utest 0.8.5
