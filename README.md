@@ -25,7 +25,7 @@ Modern programming languages often force a difficult choice between performance 
 
 - **Application languages** like Java, C#, and Python offer garbage collection (GC), which simplifies development by automatically managing memory. This convenience comes at the cost of performance overhead, unpredictable GC pauses, and non-deterministic cleanup of resources like file handles or network sockets.
 
-**Ash** is designed to bridge this gap. It is a systems programming language built on a simple philosophy: **control by default, convenience by choice.**
+**Ash** is designed to bridge this gap. It is a systems programming language built on a simple philosophy: **fast by default, convenient by choice.**
 
 Ash provides the performance and predictability of linear types (ownership and moves) as the default behavior, while allowing any data structure to be opted into garbage collection for scenarios where lifetimes are complex and shared ownership is needed.
 
