@@ -12,6 +12,12 @@ enum VarState:
   case BorrowedRead // Immutably borrowed
   case BorrowedWrite // Mutably borrowed
 
+enum VarAction:
+  case Move
+  case BorrowRead
+  case BorrowWrite
+  case Read
+
 // Stores type and ownership state of a variable
 case class VarInfo(
     typ: Type,
@@ -46,6 +52,29 @@ class Typechecker(program: Program, input: String) {
         TypeError(message, loc)
     }
   }
+
+  private def checkTransition(state: VarState, action: VarAction): Either[String, VarState] =
+    (state, action) match {
+      case (VarState.Owned, VarAction.Move) => Right(VarState.Moved)
+      case (VarState.Owned, VarAction.BorrowRead) => Right(VarState.Owned)
+      case (VarState.Owned, VarAction.BorrowWrite) => Right(VarState.Owned)
+      case (VarState.Owned, VarAction.Read) => Right(VarState.Owned)
+
+      case (VarState.Moved, VarAction.Read) => Left("Use of moved value")
+      case (VarState.Moved, VarAction.Move) => Left("Cannot move from already moved value")
+      case (VarState.Moved, VarAction.BorrowRead) => Left("Cannot borrow moved value")
+      case (VarState.Moved, VarAction.BorrowWrite) => Left("Cannot mutably borrow moved value")
+
+      case (VarState.BorrowedRead, VarAction.Read) => Right(VarState.BorrowedRead)
+      case (VarState.BorrowedRead, VarAction.BorrowRead) => Right(VarState.BorrowedRead)
+      case (VarState.BorrowedRead, VarAction.Move) => Left("Cannot move from immutably borrowed value")
+      case (VarState.BorrowedRead, VarAction.BorrowWrite) => Left("Cannot mutably borrow while immutably borrowed")
+
+      case (VarState.BorrowedWrite, VarAction.Read) => Right(VarState.BorrowedWrite)
+      case (VarState.BorrowedWrite, VarAction.BorrowWrite) => Right(VarState.BorrowedWrite)
+      case (VarState.BorrowedWrite, VarAction.Move) => Left("Cannot move from mutably borrowed value")
+      case (VarState.BorrowedWrite, VarAction.BorrowRead) => Left("Cannot immutably borrow while mutably borrowed")
+    }
 
   // Build the global context from top-level definitions
   private val globalContext: GlobalContext = {
@@ -303,10 +332,10 @@ class Typechecker(program: Program, input: String) {
           Some(loc)
         )
       )
-      varInfo.state match {
-        case VarState.Moved =>
-          throw createTypeError(s"Use of moved value '$name'.", Some(loc))
-        case _ => // OK to read from Owned, BorrowedRead, BorrowedWrite
+      checkTransition(varInfo.state, VarAction.Read) match {
+        case Left(error) =>
+          throw createTypeError(s"$error '$name'.", Some(loc))
+        case Right(_) =>
           TypedVariable(name, varInfo.typ, loc)
       }
 
@@ -438,9 +467,9 @@ class Typechecker(program: Program, input: String) {
               handleMove(argExpr, context)
             }
           case ParamMode.Ref =>
-            checkBorrow(argExpr, context, isMutableBorrow = false)
+            checkBorrow(argExpr, context, VarAction.BorrowRead)
           case ParamMode.Inout =>
-            checkBorrow(argExpr, context, isMutableBorrow = true)
+            checkBorrow(argExpr, context, VarAction.BorrowWrite)
         }
         typedArg
       }
@@ -534,13 +563,11 @@ class Typechecker(program: Program, input: String) {
           Some(loc)
         )
       }
-      varInfo.state match {
-        case VarState.Moved =>
-          throw createTypeError(
-            s"Cannot use '$name' as it has been moved.",
-            Some(loc)
-          )
-        case _ => TypedVariable(name, varInfo.typ, loc)
+      checkTransition(varInfo.state, VarAction.Read) match {
+        case Left(error) =>
+          throw createTypeError(s"Cannot use '$name' as it has been moved.", Some(loc))
+        case Right(_) =>
+          TypedVariable(name, varInfo.typ, loc)
       }
 
     case FieldAccess(obj, fieldName, loc) =>
@@ -591,28 +618,13 @@ class Typechecker(program: Program, input: String) {
             "Variable disappeared during move check"
           )
         )
-        varInfo.state match {
-          case VarState.Owned =>
-            context(name) = varInfo.copy(state = VarState.Moved)
-          case VarState.Moved =>
-            throw createTypeError(
-              s"Cannot move from '$name' because it was already moved.",
-              Some(loc)
-            )
-          case VarState.BorrowedRead =>
-            throw createTypeError(
-              s"Cannot move from '$name' because it is immutably borrowed.",
-              Some(loc)
-            )
-          case VarState.BorrowedWrite =>
-            throw createTypeError(
-              s"Cannot move from '$name' because it is mutably borrowed.",
-              Some(loc)
-            )
+        checkTransition(varInfo.state, VarAction.Move) match {
+          case Left(error) =>
+            throw createTypeError(s"$error '$name'.", Some(loc))
+          case Right(newState) =>
+            context(name) = varInfo.copy(state = newState)
         }
       case _ =>
-      // Moving from a temporary (e.g. `let x = Point{...}`) is fine.
-      // Moving from a field access is not supported in this simplified model.
     }
   }
 
@@ -620,10 +632,8 @@ class Typechecker(program: Program, input: String) {
   private def checkBorrow(
       argExpr: Expression,
       context: LocalContext,
-      isMutableBorrow: Boolean
+      action: VarAction
   ): Unit = {
-    // We only need to check borrows of variables. Borrowing a temporary is an error.
-    // Borrowing a field is allowed if the base variable is accessible.
     argExpr match {
       case Variable(name, loc) =>
         val varInfo = context.getOrElse(
@@ -633,50 +643,20 @@ class Typechecker(program: Program, input: String) {
           )
         )
 
-        if (isMutableBorrow) { // 'inout' parameter
-          if (!varInfo.isMutable) {
-            throw createTypeError(
-              s"Cannot mutably borrow immutable variable '$name'. Mark it as 'mut' or pass it to an 'inout' parameter.",
-              Some(loc)
-            )
-          }
-          varInfo.state match {
-            case VarState.Owned => // OK
-            case VarState.Moved =>
-              throw createTypeError(
-                s"Cannot mutably borrow '$name' as it has been moved.",
-                Some(loc)
-              )
-            case VarState.BorrowedRead =>
-              throw createTypeError(
-                s"Cannot mutably borrow '$name' as it is already immutably borrowed.",
-                Some(loc)
-              )
-            case VarState.BorrowedWrite =>
-              throw createTypeError(
-                s"Cannot mutably borrow '$name' as it is already mutably borrowed.",
-                Some(loc)
-              )
-          }
-        } else { // 'ref' parameter
-          varInfo.state match {
-            case VarState.Owned | VarState.BorrowedRead => // OK
-            case VarState.Moved =>
-              throw createTypeError(
-                s"Cannot borrow '$name' as it has been moved.",
-                Some(loc)
-              )
-            case VarState.BorrowedWrite =>
-              throw createTypeError(
-                s"Cannot immutably borrow '$name' as it is already mutably borrowed.",
-                Some(loc)
-              )
-          }
+        if (action == VarAction.BorrowWrite && !varInfo.isMutable) {
+          throw createTypeError(
+            s"Cannot mutably borrow immutable variable '$name'. Mark it as 'mut' or pass it to an 'inout' parameter.",
+            Some(loc)
+          )
+        }
+
+        checkTransition(varInfo.state, action) match {
+          case Left(error) =>
+            throw createTypeError(s"$error '$name'.", Some(loc))
+          case Right(_) =>
         }
       case FieldAccess(obj, _, loc) =>
-        // Recursively check if the base of the field access can be borrowed.
-        // This is a simplification; a real borrow checker would track borrows per-field.
-        checkBorrow(obj, context, isMutableBorrow)
+        checkBorrow(obj, context, action)
       case _ =>
         throw createTypeError(
           "Cannot borrow from a temporary value.",
