@@ -142,7 +142,7 @@ If you want to work on the Ash compiler itself, you can use these Mill commands.
 
 ## Dependencies
 
-- **Compiler Language:** Scala 3.3.1
+- **Compiler Language:** Scala 3.7.1
 - **Build Tool:** Mill
 - **C++ Target:** C++23 standard
 - **C++ Compiler:** Clang 20.1.5 (recommended)
