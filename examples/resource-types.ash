@@ -1,8 +1,11 @@
+fn close(fd: int) {
+    // A native function
+}
+
 resource File {
   fd: int
 
   cleanup {
-    // assume `close` is a native function.
     close(fd);
   }
 }
