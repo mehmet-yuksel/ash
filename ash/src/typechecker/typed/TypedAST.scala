@@ -79,18 +79,18 @@ case class TypedAssignmentStatement(
 
 // --- Typed Definitions ---
 case class TypedFuncDef(
-name: String,
-params: List[Param],
-returnType: Type,
-body: TypedBlockStatement,
-loc: SourceLocation
+    name: String,
+    params: List[Param],
+    returnType: Type,
+    body: TypedBlockStatement,
+    loc: SourceLocation
 )
 
 case class TypedResourceDef(
-  name: String,
-  fields: List[(String, Type)],
-  cleanup: Option[TypedBlockStatement],
-  loc: SourceLocation
+    name: String,
+    fields: List[(String, Type)],
+    cleanup: Option[TypedBlockStatement],
+    loc: SourceLocation
 )
 
 // --- Typed Program ---
