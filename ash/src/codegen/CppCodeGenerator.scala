@@ -2,51 +2,176 @@ package ash.codegen
 
 import ash.parser._
 import ash.typechecker.typed._
-
 import scala.collection.mutable
+
+class CodeWriter {
+  private val buffer = new mutable.StringBuilder()
+  private var indentLevel = 0
+  private val indentString = "    " // 4 spaces
+
+  def indent(): Unit = indentLevel += 1
+  def dedent(): Unit = indentLevel = math.max(0, indentLevel - 1)
+
+  def write(text: String): Unit = {
+    buffer.append(text)
+  }
+
+  def writeLine(text: String = ""): Unit = {
+    if (text.nonEmpty) {
+      buffer.append(indentString * indentLevel)
+      buffer.append(text)
+    }
+    buffer.append("\n")
+  }
+
+  def writeIndented(text: String): Unit = {
+    buffer.append(indentString * indentLevel)
+    buffer.append(text)
+  }
+
+  def inBlock(opening: String = "{", closing: String = "}")(body: => Unit): Unit = {
+    writeLine(opening)
+    indent()
+    body
+    dedent()
+    writeIndented(closing)
+  }
+
+  def inInlineBlock(body: => Unit): Unit = {
+    write(" { ")
+    body
+    write(" }")
+  }
+
+  def inNamespace(name: String)(body: => Unit): Unit = {
+    writeLine(s"namespace $name {")
+    indent()
+    body
+    dedent()
+    writeLine("}")
+  }
+
+  def writeStruct(name: String, isClass: Boolean = false)(body: => Unit): Unit = {
+    val keyword = if (isClass) "class" else "struct"
+    writeLine(s"$keyword $name {")
+    if (isClass) writeLine("public:")
+    indent()
+    body
+    dedent()
+    writeLine("};")
+    writeLine()
+  }
+
+  def writeFunction(
+    returnType: String,
+    name: String,
+    params: String,
+    isDeclaration: Boolean = false
+  )(body: => Unit = ()): Unit = {
+    write(s"$returnType $name($params)")
+    if (isDeclaration) {
+      writeLine(";")
+    } else {
+      write(" ")
+      inBlock() { body }
+      writeLine()
+    }
+  }
+
+  def writeConstructor(
+    className: String,
+    params: String,
+    initList: Option[String] = None,
+    isExplicit: Boolean = false,
+    isNoexcept: Boolean = false
+  )(body: => Unit): Unit = {
+    if (isExplicit) write("explicit ")
+    write(s"$className($params)")
+    if (isNoexcept) write(" noexcept")
+    initList.foreach(init => write(s" : $init"))
+    write(" ")
+    inBlock() { body }
+    writeLine()
+  }
+
+  def writeComment(comment: String, style: CommentStyle = CommentStyle.SingleLine): Unit = {
+    style match {
+      case CommentStyle.SingleLine => writeLine(s"// $comment")
+      case CommentStyle.Block =>
+        writeLine("/*")
+        comment.split("\n").foreach(line => writeLine(s" * $line"))
+        writeLine(" */")
+    }
+  }
+
+  def writeSectionHeader(title: String): Unit = {
+    writeLine(s"// --- $title ---")
+  }
+
+  def result(): String = buffer.toString()
+  def clear(): Unit = {
+    buffer.clear()
+    indentLevel = 0
+  }
+}
+
+enum CommentStyle {
+  case SingleLine, Block
+}
 
 class CppCodeGenerator(program: TypedProgram) {
 
-  private val forwardDeclarations = new mutable.StringBuilder()
-  private val implementations = new mutable.StringBuilder()
+  private val headers = new CodeWriter()
+  private val forward = new CodeWriter()
+  private val impl = new CodeWriter()
 
-  // A map from struct name to its definition for easy lookup.
+  // Maps for easy lookup
   private val structDefs: Map[String, StructDef] =
     program.structs.map(s => s.name -> s).toMap
 
-  // A map from resource name to its definition for easy lookup.
   private val resourceDefs: Map[String, TypedResourceDef] =
     program.resources.map(r => r.name -> r).toMap
 
   def generate(): String = {
-    // --- Standard Headers ---
-    forwardDeclarations.append("#include <iostream>\n")
-    forwardDeclarations.append("#include <utility> // For std::move\n")
-    forwardDeclarations.append("#include <print> // For std::println\n")
-    forwardDeclarations.append(
-      "#include \"gc.h\" // For garbage collection\n\n"
-    )
+    generateHeaders()
+    generateForwardDeclarations()
+    generateImplementations()
+    generateMain()
 
-    // --- Struct and Resource Definitions ---
+    headers.result() + forward.result() + impl.result()
+  }
+
+  private def generateHeaders(): Unit = {
+    headers.writeSectionHeader("Standard Headers")
+    headers.writeLine("#include <iostream>")
+    headers.writeLine("#include <utility>  // For std::move")
+    headers.writeLine("#include <print>    // For std::println")
+    headers.writeLine("#include \"gc.h\"     // For garbage collection")
+    headers.writeLine()
+  }
+
+  private def generateForwardDeclarations(): Unit = {
+    forward.writeSectionHeader("Type Definitions")
     program.structs.foreach(generateStructDef)
     program.resources.foreach(generateResourceDef)
 
-    // --- Function Forward Declarations ---
+    forward.writeSectionHeader("Function Forward Declarations")
     program.functions.foreach(generateFunctionForwardDecl)
-    forwardDeclarations.append("\n")
+    forward.writeLine()
+  }
 
-    // --- Function Implementations ---
+  private def generateImplementations(): Unit = {
+    impl.writeSectionHeader("Function Implementations")
     program.functions.foreach(generateFunctionImpl)
+  }
 
-    // --- Main Entry Point ---
-    // C++ main must return int
-    implementations.append("int main() {\n")
-    implementations.append("    GC_init();\n")
-    implementations.append("    main_ash();\n")
-    implementations.append("    return 0;\n")
-    implementations.append("}\n")
-
-    forwardDeclarations.toString() + implementations.toString()
+  private def generateMain(): Unit = {
+    impl.writeSectionHeader("Main Entry Point")
+    impl.writeFunction("int", "main", "") {
+      impl.writeLine("GC_init();")
+      impl.writeLine("main_ash();")
+      impl.writeLine("return 0;")
+    }
   }
 
   private def generateType(t: Type): String = t match {
@@ -58,216 +183,179 @@ class CppCodeGenerator(program: TypedProgram) {
   }
 
   private def generateStructDef(s: StructDef): Unit = {
-    forwardDeclarations.append(s"struct ${s.name} {\n")
-    s.fields.foreach { case (fieldName, fieldType) =>
-      forwardDeclarations.append(
-        s"    ${generateType(fieldType)} ${fieldName};\n"
-      )
+    forward.writeStruct(s.name) {
+      s.fields.foreach { case (fieldName, fieldType) =>
+        forward.writeLine(s"${generateType(fieldType)} $fieldName;")
+      }
     }
-    forwardDeclarations.append("};\n\n")
   }
 
   private def generateResourceDef(r: TypedResourceDef): Unit = {
-    forwardDeclarations.append(s"struct ${r.name} {\n")
-    r.fields.foreach { case (fieldName, fieldType) =>
-      forwardDeclarations.append(
-        s"    ${generateType(fieldType)} ${fieldName};\n"
-      )
-    }
-    forwardDeclarations.append("    bool owns_resource = true;\n\n")
-
-    // 2. Constructor for initialization from fields
-    val constructorParams = r.fields
-      .map { case (fieldName, fieldType) =>
-        s"${generateType(fieldType)} ${fieldName}_in"
+    forward.writeStruct(r.name) {
+      // Fields
+      r.fields.foreach { case (fieldName, fieldType) =>
+        forward.writeLine(s"${generateType(fieldType)} $fieldName;")
       }
-      .mkString(", ")
-    val constructorInits = r.fields
-      .map { case (fieldName, _) =>
-        s"${fieldName}(std::move(${fieldName}_in))"
+      forward.writeLine("bool owns_resource = true;")
+      forward.writeLine()
+
+      // Constructor
+      val constructorParams = r.fields
+        .map { case (fieldName, fieldType) =>
+          s"${generateType(fieldType)} ${fieldName}_in"
+        }
+        .mkString(", ")
+
+      val initList = if (r.fields.nonEmpty) {
+        Some(r.fields.map { case (fieldName, _) =>
+          s"$fieldName(std::move(${fieldName}_in))"
+        }.mkString(", "))
+      } else None
+
+      forward.writeConstructor(r.name, constructorParams, initList, isExplicit = true) {}
+
+      forward.writeSectionHeader("Rule of 5")
+
+      // Destructor
+      forward.write(s"~${r.name}()")
+      forward.write(" ")
+      forward.inBlock() {
+        r.cleanup.foreach { cleanupBlock =>
+          forward.writeLine("if (owns_resource) {")
+          forward.indent()
+          generateResourceCleanup(cleanupBlock, forward)
+          forward.dedent()
+          forward.writeLine("}")
+        }
       }
-      .mkString(", ")
+      forward.writeLine()
 
-    forwardDeclarations.append(s"    explicit ${r.name}(${constructorParams})")
-    if (r.fields.nonEmpty) {
-      forwardDeclarations.append(s" : ${constructorInits}")
+      // Delete copy operations
+      forward.writeLine(s"${r.name}(const ${r.name}&) = delete;")
+      forward.writeLine(s"${r.name}& operator=(const ${r.name}&) = delete;")
+      forward.writeLine()
+
+      // Move constructor
+      generateMoveConstructor(r)
+
+      // Move assignment operator
+      generateMoveAssignment(r)
     }
-    forwardDeclarations.append(" {}\n\n")
+  }
 
-    // 3. Rule of 5
-    forwardDeclarations.append("    // --- Rule of 5/3 --- \n")
-
-    // Destructor
-    forwardDeclarations.append(s"    ~${r.name}() {\n")
-    r.cleanup.foreach { cleanupBlock =>
-      forwardDeclarations.append("        if (owns_resource) {\n")
-      cleanupBlock match {
-        case TypedBlockStatement(statements, _) =>
-          statements.foreach { stmt =>
-            forwardDeclarations.append("            ")
-            generateStatementInline(stmt)
-          }
-      }
-      forwardDeclarations.append("        }\n")
-    }
-    forwardDeclarations.append("    }\n\n")
-
-    // Delete copy operations
-    forwardDeclarations.append(s"    ${r.name}(const ${r.name}&) = delete;\n")
-    forwardDeclarations.append(
-      s"    ${r.name}& operator=(const ${r.name}&) = delete;\n\n"
-    )
-
-    // Move constructor
+  private def generateMoveConstructor(r: TypedResourceDef): Unit = {
     val moveCtorFieldInits = r.fields.map { case (fieldName, _) =>
-      s"${fieldName}(std::move(other.${fieldName}))"
+      s"$fieldName(std::move(other.$fieldName))"
     }
-    val moveCtorInits =
-      (moveCtorFieldInits :+ "owns_resource(other.owns_resource)").mkString(
-        ", "
-      )
+    val initList = (moveCtorFieldInits :+ "owns_resource(other.owns_resource)").mkString(", ")
 
-    forwardDeclarations.append(
-      s"    ${r.name}(${r.name}&& other) noexcept : ${moveCtorInits} {\n"
-    )
-    forwardDeclarations.append("        other.owns_resource = false;\n")
-    forwardDeclarations.append("    }\n\n")
+    forward.writeConstructor(
+      r.name,
+      s"${r.name}&& other",
+      Some(initList),
+      isNoexcept = true
+    ) {
+      forward.writeLine("other.owns_resource = false;")
+    }
+  }
 
-    // Move assignment operator
-    forwardDeclarations.append(
-      s"    ${r.name}& operator=(${r.name}&& other) noexcept {\n"
-    )
-    forwardDeclarations.append("        if (this != &other) {\n")
-    // Cleanup existing resource
-    r.cleanup.foreach { cleanupBlock =>
-      forwardDeclarations.append("            if (owns_resource) {\n")
-      cleanupBlock match {
-        case TypedBlockStatement(statements, _) =>
-          statements.foreach { stmt =>
-            forwardDeclarations.append("                ")
-            generateStatementInline(stmt)
-          }
+  private def generateMoveAssignment(r: TypedResourceDef): Unit = {
+    forward.write(s"${r.name}& operator=(${r.name}&& other) noexcept")
+    forward.write(" ")
+    forward.inBlock() {
+      forward.writeLine("if (this != &other) {")
+      forward.indent()
+
+      // Cleanup existing resource
+      r.cleanup.foreach { cleanupBlock =>
+        forward.writeLine("if (owns_resource) {")
+        forward.indent()
+        generateResourceCleanup(cleanupBlock, forward)
+        forward.dedent()
+        forward.writeLine("}")
       }
-      forwardDeclarations.append("            }\n")
-    }
-    // Move fields from other
-    r.fields.foreach { case (fieldName, _) =>
-      forwardDeclarations.append(
-        s"            ${fieldName} = std::move(other.${fieldName});\n"
-      )
-    }
-    // Transfer ownership
-    forwardDeclarations.append(
-      "            owns_resource = other.owns_resource;\n"
-    )
-    forwardDeclarations.append("            other.owns_resource = false;\n")
-    forwardDeclarations.append("        }\n")
-    forwardDeclarations.append("        return *this;\n")
-    forwardDeclarations.append("    }\n")
 
-    forwardDeclarations.append("};\n\n")
+      // Move fields from other
+      r.fields.foreach { case (fieldName, _) =>
+        forward.writeLine(s"$fieldName = std::move(other.$fieldName);")
+      }
+
+      // Transfer ownership
+      forward.writeLine("owns_resource = other.owns_resource;")
+      forward.writeLine("other.owns_resource = false;")
+
+      forward.dedent()
+      forward.writeLine("}")
+      forward.writeLine("return *this;")
+    }
+  }
+
+  private def generateResourceCleanup(cleanup: TypedStatement, writer: CodeWriter): Unit = {
+    cleanup match {
+      case TypedBlockStatement(statements, _) =>
+        statements.foreach(stmt => generateStatement(stmt, writer))
+    }
   }
 
   private def generateFunctionForwardDecl(f: TypedFuncDef): Unit = {
-    val c_name = if (f.name == "main") "main_ash" else f.name
-    forwardDeclarations.append(
-      s"${generateType(f.returnType)} ${c_name}(${generateParams(f.params)});\n"
-    )
+    val cName = if (f.name == "main") "main_ash" else f.name
+    forward.writeFunction(
+      generateType(f.returnType),
+      cName,
+      generateParams(f.params),
+      isDeclaration = true
+    )()
   }
 
   private def generateFunctionImpl(f: TypedFuncDef): Unit = {
-    val c_name = if (f.name == "main") "main_ash" else f.name
-    implementations.append(
-      s"${generateType(f.returnType)} ${c_name}(${generateParams(f.params)}) {\n"
-    )
-    f.body.statements.foreach(s => generateStatement(s, 1))
-    implementations.append("}\n\n")
-  }
-
-  private def generateParams(params: List[Param]): String = {
-    params
-      .map { p =>
-        val paramType = generateType(p.typ)
-        p.mode match {
-          case ParamMode.Move(_) => s"$paramType ${p.name}"
-          case ParamMode.Ref     => s"const $paramType& ${p.name}"
-          case ParamMode.Inout   => s"$paramType& ${p.name}"
-        }
-      }
-      .mkString(", ")
-  }
-
-  private def indent(level: Int): String = "    " * level
-
-  private def generateStatementInline(stmt: TypedStatement): Unit = {
-    stmt match {
-      case TypedBlockStatement(statements, _) =>
-        forwardDeclarations.append("{\n")
-        statements.foreach(s => {
-          forwardDeclarations.append("            ")
-          generateStatementInline(s)
-        })
-        forwardDeclarations.append("        }\n")
-
-      case TypedLetStatement(varName, isMutable, init, _) =>
-        val initExpr = generateExpression(init)
-        val typeName = generateType(init.typ)
-        forwardDeclarations.append(
-          s"$typeName $varName = std::move($initExpr);\n"
-        )
-
-      case TypedExpressionStatement(expr, _) =>
-        forwardDeclarations.append(s"${generateExpression(expr)};\n")
-
-      case TypedReturnStatement(exprOpt, _) =>
-        exprOpt match {
-          case Some(expr) =>
-            forwardDeclarations.append(s"return ${generateExpression(expr)};\n")
-          case None => forwardDeclarations.append("return;\n")
-        }
-
-      case TypedAssignmentStatement(target, value, _) =>
-        forwardDeclarations.append(
-          s"${generateExpression(target)} = std::move(${generateExpression(value)});\n"
-        )
+    val cName = if (f.name == "main") "main_ash" else f.name
+    impl.writeFunction(
+      generateType(f.returnType),
+      cName,
+      generateParams(f.params)
+    ) {
+      f.body.statements.foreach(stmt => generateStatement(stmt, impl))
     }
   }
 
-  private def generateStatement(
-      stmt: TypedStatement,
-      indentLevel: Int
-  ): Unit = {
-    implementations.append(indent(indentLevel))
+  private def generateParams(params: List[Param]): String = {
+    params.map { p =>
+      val paramType = generateType(p.typ)
+      p.mode match {
+        case ParamMode.Move(_) => s"$paramType ${p.name}"
+        case ParamMode.Ref     => s"const $paramType& ${p.name}"
+        case ParamMode.Inout   => s"$paramType& ${p.name}"
+      }
+    }.mkString(", ")
+  }
+
+  private def generateStatement(stmt: TypedStatement, writer: CodeWriter): Unit = {
     stmt match {
       case TypedBlockStatement(statements, _) =>
-        implementations.delete(
-          implementations.length - indent(indentLevel).length,
-          implementations.length
-        ) // remove indent
-        implementations.append("{\n")
-        statements.foreach(s => generateStatement(s, indentLevel + 1))
-        implementations.append(s"${indent(indentLevel)}}\n")
+        writer.inBlock() {
+          statements.foreach(s => generateStatement(s, writer))
+        }
+        writer.writeLine()
 
       case TypedLetStatement(varName, isMutable, init, _) =>
-        // C++ locals are mutable by default, so `isMutable` is ignored for now.
-        // For move semantics, we use std::move on the initializer.
         val initExpr = generateExpression(init)
         val typeName = generateType(init.typ)
-        implementations.append(s"$typeName $varName = std::move($initExpr);\n")
+        writer.writeLine(s"$typeName $varName = std::move($initExpr);")
 
       case TypedExpressionStatement(expr, _) =>
-        implementations.append(s"${generateExpression(expr)};\n")
+        writer.writeLine(s"${generateExpression(expr)};")
 
       case TypedReturnStatement(exprOpt, _) =>
         exprOpt match {
           case Some(expr) =>
-            implementations.append(s"return ${generateExpression(expr)};\n")
-          case None => implementations.append("return;\n")
+            writer.writeLine(s"return ${generateExpression(expr)};")
+          case None =>
+            writer.writeLine("return;")
         }
 
       case TypedAssignmentStatement(target, value, _) =>
-        implementations.append(
-          s"${generateExpression(target)} = std::move(${generateExpression(value)});\n"
+        writer.writeLine(
+          s"${generateExpression(target)} = std::move(${generateExpression(value)});"
         )
     }
   }
@@ -276,71 +364,78 @@ class CppCodeGenerator(program: TypedProgram) {
     case TypedIntLiteral(value, _, _)  => value.toString
     case TypedBoolLiteral(value, _, _) => if (value) "true" else "false"
     case TypedVariable(name, _, _)     => name
+
     case TypedFieldAccess(obj, fieldName, _, _) =>
       val objExpr = generateExpression(obj)
-      // Use -> for managed types (pointers), . for regular structs
       obj.typ match {
         case ManagedType(_, _) => s"$objExpr->$fieldName"
         case _                 => s"$objExpr.$fieldName"
       }
+
     case TypedFunctionCall(funcName, args, _, _) =>
-      val c_name = if (funcName == "main") "main_ash" else funcName
+      val cName = if (funcName == "main") "main_ash" else funcName
       val argList = args.map(generateExpression).mkString(", ")
-      s"$c_name($argList)"
+      s"$cName($argList)"
+
     case TypedStructLiteral(typeName, values, _, _) =>
-      val isResource = resourceDefs.contains(typeName)
+      generateStructOrResourceLiteral(typeName, values, managed = false)
 
-      val fields = structDefs
-        .get(typeName)
-        .map(_.fields)
-        .orElse(resourceDefs.get(typeName).map(_.fields))
-        .getOrElse(throw new RuntimeException(s"Unknown type: $typeName"))
-
-      val orderedValues = fields
-        .map { case (fieldName, _) =>
-          val (_, expr) = values.find(_._1 == fieldName).get
-          generateExpression(expr)
-        }
-        .mkString(", ")
-
-      if (isResource) {
-        s"$typeName($orderedValues)"
-      } else {
-        s"$typeName{$orderedValues}"
-      }
     case TypedManagedStructLiteral(typeName, values, _, _) =>
-      // For managed types, allocate using GC_malloc and use placement new
-      val fields = structDefs
-        .get(typeName)
-        .map(_.fields)
-        .orElse(resourceDefs.get(typeName).map(_.fields))
-        .getOrElse(throw new RuntimeException(s"Unknown type: $typeName"))
+      generateStructOrResourceLiteral(typeName, values, managed = true)
 
-      val orderedValues = fields.map { case (fieldName, _) =>
-        val (_, expr) = values.find(_._1 == fieldName).get
-        generateExpression(expr)
-      }
-      s"new(GC_malloc(sizeof($typeName))) $typeName{${orderedValues.mkString(", ")}}"
     case TypedPrintlnExpression(formatString, args, _, _) =>
-      val argList = args.map(generateExpression).mkString(", ")
       if (args.nonEmpty) {
+        val argList = args.map(generateExpression).mkString(", ")
         s"std::println(\"$formatString\", $argList)"
       } else {
         s"std::println(\"$formatString\")"
       }
+
     case TypedBinaryExpression(left, op, right, _, _) =>
       val leftExpr = generateExpression(left)
       val rightExpr = generateExpression(right)
-      val opStr = op match {
-        case BinaryOp.Add => "+"
-        case BinaryOp.Sub => "-"
-        case BinaryOp.Lt => "<"
-        case BinaryOp.Le => "<="
-        case BinaryOp.Gt => ">"
-        case BinaryOp.Ge => ">="
-        case BinaryOp.Eq => "=="
-        case BinaryOp.Ne => "!="
-      }
+      val opStr = binaryOpToString(op)
       s"($leftExpr $opStr $rightExpr)"
+  }
+
+  private def generateStructOrResourceLiteral(
+    typeName: String,
+    values: List[(String, TypedExpression)],
+    managed: Boolean
+  ): String = {
+    val isResource = resourceDefs.contains(typeName)
+    val fields = getFieldsForType(typeName)
+
+    val orderedValues = fields.map { case (fieldName, _) =>
+      val (_, expr) = values.find(_._1 == fieldName).get
+      generateExpression(expr)
+    }.mkString(", ")
+
+    if (managed) {
+      s"new(GC_malloc(sizeof($typeName))) $typeName{$orderedValues}"
+    } else if (isResource) {
+      s"$typeName($orderedValues)"
+    } else {
+      s"$typeName{$orderedValues}"
+    }
+  }
+
+  private def getFieldsForType(typeName: String): List[(String, Type)] = {
+    structDefs
+      .get(typeName)
+      .map(_.fields)
+      .orElse(resourceDefs.get(typeName).map(_.fields))
+      .getOrElse(throw new RuntimeException(s"Unknown type: $typeName"))
+  }
+
+  private def binaryOpToString(op: BinaryOp): String = op match {
+    case BinaryOp.Add => "+"
+    case BinaryOp.Sub => "-"
+    case BinaryOp.Lt  => "<"
+    case BinaryOp.Le  => "<="
+    case BinaryOp.Gt  => ">"
+    case BinaryOp.Ge  => ">="
+    case BinaryOp.Eq  => "=="
+    case BinaryOp.Ne  => "!="
   }
 }
