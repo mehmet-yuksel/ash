@@ -73,7 +73,7 @@ object IntegrationTests extends TestSuite {
 
       // 3. Compile the generated C++ to an executable using clang
       val clangCmd = Seq(
-        "clang++",
+        "g++",
         "-std=c++23",
         "-o",
         exeFile.getAbsolutePath,

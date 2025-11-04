@@ -75,7 +75,7 @@ fn main() -> unit {
 Before you can use the Ash compiler, you need to have the following tools installed:
 
 1.  **Mill:** A Scala build tool. See the [official installation guide](https://mill-build.org/mill/cli/installation-ide.html).
-2.  **Clang:** A C++ compiler, version **20.1.5** or compatible.
+2.  **GCC:** A C++ compiler, version **14.3.0** or compatible.
 3.  **Java Development Kit (JDK):** Required to run Mill and the Scala compiler.
 
 ## Usage: Compiling Your First Ash Program
@@ -109,10 +109,10 @@ Generated hello.cpp
 
 ### Step 3: Compile C++ to a Native Executable
 
-Use Clang to compile the generated C++ file. The `-std=c++23` flag is required.
+Use GCC to compile the generated C++ file. The `-std=c++23` flag is required.
 
 ```bash
-clang hello.cpp -o hello.exe -std=c++23
+g++ -std=c++23 hello.cpp gc.cpp -o hello
 ```
 
 This creates a native executable file named `hello.exe` (or `hello` on Linux/macOS).
@@ -145,7 +145,7 @@ If you want to work on the Ash compiler itself, you can use these Mill commands.
 - **Compiler Language:** Scala 3.7.1
 - **Build Tool:** Mill
 - **C++ Target:** C++23 standard
-- **C++ Compiler:** Clang 20.1.5 (recommended)
+- **C++ Compiler:** GCC 14.3.0 (recommended)
 
 ## Language Reference
 
