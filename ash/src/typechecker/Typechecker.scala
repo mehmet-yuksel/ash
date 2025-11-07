@@ -6,64 +6,84 @@ import ash.typechecker.typed._
 
 import scala.collection.mutable
 
-enum VarState:
-  case Owned // Variable owns the value
-  case Moved // Value has been moved from this variable
-  case BorrowedRead // Immutably borrowed
-  case BorrowedWrite // Mutably borrowed
-
-enum VarAction:
-  case Move
-  case BorrowRead
-  case BorrowWrite
-  case Read
-
-// Stores type and ownership state of a variable
-case class VarInfo(
-    typ: Type,
-    state: VarState,
-    isMutable: Boolean, // True if the variable itself can be reassigned (e.g. inout params)
-    definitionLoc: SourceLocation
-)
-
-// Context for type checking
-case class GlobalContext(
-    structs: Map[String, StructDef] = Map.empty,
-    resources: Map[String, ResourceDef] = Map.empty,
-    functions: Map[String, FuncDef] = Map.empty
-)
-
-type LocalContext = mutable.Map[String, VarInfo]
 case class TypeError(message: String, loc: Option[SourceLocation] = None)
     extends Exception(message)
 
 class Typechecker(program: Program, input: String) {
 
-  // Helper method to create TypeError with preview
-  private def createTypeError(
-      message: String,
-      loc: Option[SourceLocation] = None
-  ): TypeError = {
+  private def createTypeError(message: String, loc: Option[SourceLocation] = None): TypeError =
     loc match {
-      case Some(location) =>
-        val preview = ErrorUtils.generateErrorPreview(input, location)
+      case Some(l) =>
+        val preview = ErrorUtils.generateErrorPreview(input, l)
         TypeError(s"$message\n$preview", loc)
-      case None =>
-        TypeError(message, loc)
+      case None => TypeError(message, loc)
     }
+
+  enum VarState:
+    case Owned, Moved, BorrowedRead, BorrowedWrite
+
+  enum VarAction:
+    case Move, Read, BorrowRead, BorrowWrite
+
+  case class VarInfo(
+      typ: Type,
+      state: VarState,
+      isMutable: Boolean,
+      definitionLoc: SourceLocation
+  )
+
+  class LocalScope(private val underlying: mutable.Map[String, VarInfo] = mutable.Map.empty) {
+    def contains(name: String): Boolean = underlying.contains(name)
+    def get(name: String): Option[VarInfo] = underlying.get(name)
+    def declare(name: String, info: VarInfo): Unit =
+      if (underlying.contains(name))
+        throw createTypeError(s"Variable '$name' is already defined in this scope.", Some(info.definitionLoc))
+      else underlying(name) = info
+
+    def update(name: String, info: VarInfo): Unit =
+      if (!underlying.contains(name))
+        throw new IllegalStateException(s"Attempt to update unknown variable '$name'")
+      else underlying(name) = info
+
+    def cloneScope(): LocalScope = new LocalScope(underlying.clone())
   }
 
-  private def checkTransition(state: VarState, action: VarAction): Either[String, VarState] =
-    (state, action) match {
-      case (VarState.Owned, VarAction.Move) => Right(VarState.Moved)
-      case (VarState.Owned, VarAction.BorrowRead) => Right(VarState.Owned)
-      case (VarState.Owned, VarAction.BorrowWrite) => Right(VarState.Owned)
-      case (VarState.Owned, VarAction.Read) => Right(VarState.Owned)
+  case class GlobalContext(
+      structs: Map[String, StructDef],
+      resources: Map[String, ResourceDef],
+      functions: Map[String, FuncDef]
+  )
 
-      case (VarState.Moved, VarAction.Read) => Left("Use of moved value")
-      case (VarState.Moved, VarAction.Move) => Left("Cannot move from already moved value")
-      case (VarState.Moved, VarAction.BorrowRead) => Left("Cannot borrow moved value")
-      case (VarState.Moved, VarAction.BorrowWrite) => Left("Cannot mutably borrow moved value")
+  private val globalContext: GlobalContext = {
+    def dupCheck[T](items: Seq[(String, T)], kind: String): Unit = {
+      val dups = items.groupMap(_._1)(_._2).filter(_._2.size > 1)
+      dups.headOption.foreach { case (name, defs) =>
+        throw createTypeError(s"$kind '$name' is defined multiple times.", None)
+      }
+    }
+
+    dupCheck(program.structs.map(s => s.name -> s), "Struct")
+    dupCheck(program.resources.map(r => r.name -> r), "Resource")
+    dupCheck(program.functions.map(f => f.name -> f), "Function")
+
+    GlobalContext(
+      program.structs.map(s => s.name -> s).toMap,
+      program.resources.map(r => r.name -> r).toMap,
+      program.functions.map(f => f.name -> f).toMap
+    )
+  }
+
+  private def transition(state: VarState, action: VarAction): Either[String, VarState] =
+    (state, action) match {
+      case (VarState.Owned, VarAction.Move)      => Right(VarState.Moved)
+      case (VarState.Owned, VarAction.Read)      => Right(VarState.Owned)
+      case (VarState.Owned, VarAction.BorrowRead)=> Right(VarState.Owned)
+      case (VarState.Owned, VarAction.BorrowWrite)=> Right(VarState.Owned)
+
+      case (VarState.Moved, VarAction.Read)      => Left("Use of moved value")
+      case (VarState.Moved, VarAction.Move)      => Left("Cannot move from already moved value")
+      case (VarState.Moved, VarAction.BorrowRead)=> Left("Cannot borrow moved value")
+      case (VarState.Moved, VarAction.BorrowWrite)=> Left("Cannot mutably borrow moved value")
 
       case (VarState.BorrowedRead, VarAction.Read) => Right(VarState.BorrowedRead)
       case (VarState.BorrowedRead, VarAction.BorrowRead) => Right(VarState.BorrowedRead)
@@ -76,737 +96,341 @@ class Typechecker(program: Program, input: String) {
       case (VarState.BorrowedWrite, VarAction.BorrowRead) => Left("Cannot immutably borrow while mutably borrowed")
     }
 
-  // Build the global context from top-level definitions
-  private val globalContext: GlobalContext = {
-    // Check for duplicate struct names
-    val duplicateStruct = program.structs.groupBy(_.name).find(_._2.size > 1)
-    duplicateStruct.foreach { case (name, defs) =>
-      throw createTypeError(
-        s"Struct '$name' is defined multiple times.",
-        Some(defs(1).loc)
-      )
-    }
-
-    // Check for duplicate resource names
-    val duplicateResource =
-      program.resources.groupBy(_.name).find(_._2.size > 1)
-    duplicateResource.foreach { case (name, defs) =>
-      throw createTypeError(
-        s"Resource '$name' is defined multiple times.",
-        Some(defs(1).loc)
-      )
-    }
-
-    // Check for duplicate function names
-    val duplicateFunction =
-      program.functions.groupBy(_.name).find(_._2.size > 1)
-    duplicateFunction.foreach { case (name, defs) =>
-      throw createTypeError(
-        s"Function '$name' is defined multiple times.",
-        Some(defs(1).loc)
-      )
-    }
-
-    GlobalContext(
-      program.structs.map(s => s.name -> s).toMap,
-      program.resources.map(r => r.name -> r).toMap,
-      program.functions.map(f => f.name -> f).toMap
-    )
-  }
-
-  /** Public entry point to start the type checking process. */
   def check(): TypedProgram = {
-    val mainFunc = globalContext.functions.getOrElse(
-      "main",
-      throw createTypeError("No 'main' function found in the program.")
-    )
-    if (mainFunc.params.nonEmpty) {
-      throw createTypeError(
-        "'main' function cannot have parameters.",
-        Some(mainFunc.loc)
-      )
-    }
+    // Ensure main exists and has no parameters
+    val mainFunc = globalContext.functions.getOrElse("main", throw createTypeError("No 'main' function found in the program."))
+    if (mainFunc.params.nonEmpty) throw createTypeError("'main' function cannot have parameters.", Some(mainFunc.loc))
 
-    // Check all resource cleanup blocks
+    // Check resources, functions
     program.resources.foreach(checkResourceCleanup)
-
-    // Check all function bodies and collect the typed versions
-    val typedFunctions = program.functions.map(checkFunction)
     val typedResources = program.resources.map(checkResource)
+    val typedFuncs = program.functions.map(checkFunction)
 
     TypedProgram(
       program.structs,
       typedResources,
-      typedFunctions,
+      typedFuncs,
       program.loc
     )
   }
 
-  /** Checks a resource's cleanup block. */
   private def checkResourceCleanup(resource: ResourceDef): Unit = {
     resource.cleanup.foreach { cleanupBlock =>
-      val localContext: LocalContext = mutable.Map.empty
-
-      // Add all resource fields to the cleanup context as mutable owned variables
-      resource.fields.foreach { case (fieldName, fieldType) =>
-        validateType(fieldType)
-        localContext(fieldName) = VarInfo(
-          fieldType,
-          VarState.Owned,
-          isMutable = true, // All fields are mutable in cleanup
-          resource.loc
-        )
+      val scope = new LocalScope()
+      // Resource fields are present as owned mutable variables in cleanup
+      resource.fields.foreach { case (name, tpe) =>
+        validateType(tpe)
+        scope.declare(name, VarInfo(tpe, VarState.Owned, isMutable = true, resource.loc))
       }
-
-      // Check the cleanup block with unit return type expected
-      checkStatement(cleanupBlock, localContext, Some(UnitType()))
+      // Typecheck block expecting Unit
+      checkStatement(cleanupBlock, scope, Some(UnitType()))
     }
   }
 
-  /** Converts a ResourceDef to TypedResourceDef. */
   private def checkResource(resource: ResourceDef): TypedResourceDef = {
     val typedCleanup = resource.cleanup.map { cleanupBlock =>
-      val localContext: LocalContext = mutable.Map.empty
-
-      // Add all resource fields to the cleanup context as mutable owned variables
-      resource.fields.foreach { case (fieldName, fieldType) =>
-        validateType(fieldType)
-        localContext(fieldName) = VarInfo(
-          fieldType,
-          VarState.Owned,
-          isMutable = true, // All fields are mutable in cleanup
-          resource.loc
-        )
+      val scope = new LocalScope()
+      resource.fields.foreach { case (name, tpe) =>
+        validateType(tpe)
+        scope.declare(name, VarInfo(tpe, VarState.Owned, isMutable = true, resource.loc))
       }
-
-      // Check and convert the cleanup block
-      checkStatement(cleanupBlock, localContext, Some(UnitType())) match {
-        case block: TypedBlockStatement => block
+      checkStatement(cleanupBlock, scope, Some(UnitType())) match {
+        case tb: TypedBlockStatement => tb
         case other => TypedBlockStatement(List(other), cleanupBlock.loc)
       }
     }
-
-    TypedResourceDef(
-      resource.name,
-      resource.fields,
-      typedCleanup,
-      resource.loc
-    )
+    TypedResourceDef(resource.name, resource.fields, typedCleanup, resource.loc)
   }
 
-  /** Checks a single function definition. */
-  private def checkFunction(func: FuncDef): TypedFuncDef = {
-    val localContext: LocalContext = mutable.Map.empty
-
-    // Populate context with function parameters
-    func.params.foreach { param =>
-      validateType(param.typ)
-      val (isMutable, initialState) = param.mode match {
+  private def checkFunction(f: FuncDef): TypedFuncDef = {
+    val scope = new LocalScope()
+    // Seed params
+    f.params.foreach { p =>
+      validateType(p.typ)
+      val (isMutable, initState) = p.mode match {
         case ParamMode.Move(mutable) => (mutable, VarState.Owned)
         case ParamMode.Inout         => (true, VarState.BorrowedWrite)
         case ParamMode.Ref           => (false, VarState.BorrowedRead)
       }
-      localContext(param.name) =
-        VarInfo(param.typ, initialState, isMutable, param.loc)
+      scope.declare(p.name, VarInfo(p.typ, initState, isMutable, p.loc))
     }
 
-    // Check the function body, providing the expected return type
-    val typedBody =
-      checkStatement(func.body, localContext, Some(func.returnType)) match {
-        case tb: TypedBlockStatement => tb
-        case other =>
-          throw new IllegalStateException(
-            s"Function body must be a block, but got ${other.getClass}"
-          )
-      }
+    val typedBody = checkStatement(f.body, scope, Some(f.returnType)) match {
+      case tb: TypedBlockStatement => tb
+      case other => throw new IllegalStateException(s"Expected block statement for function body, got ${other.getClass}")
+    }
 
-    TypedFuncDef(func.name, func.params, func.returnType, typedBody, func.loc)
+    TypedFuncDef(f.name, f.params, f.returnType, typedBody, f.loc)
   }
 
-  /** Recursively checks a statement. */
-  private def checkStatement(
-      stmt: Statement,
-      context: LocalContext,
-      expectedReturnType: Option[Type]
-  ): TypedStatement = stmt match {
-    case BlockStatement(statements, loc) =>
-      // Each block gets a copy of the context to handle shadowing and scope.
-      val blockContext = context.clone()
-      val typedStatements =
-        statements.map(s => checkStatement(s, blockContext, expectedReturnType))
-      TypedBlockStatement(typedStatements, loc)
+  private def checkStatement(stmt: Statement, scope: LocalScope, expectedReturn: Option[Type]): TypedStatement = stmt match {
+    case BlockStatement(stmts, loc) =>
+      val inner = scope.cloneScope()
+      val typed = stmts.map(s => checkStatement(s, inner, expectedReturn))
+      TypedBlockStatement(typed, loc)
 
-    case LetStatement(varName, isMutable, typeAnnotation, init, loc) =>
-      if (context.contains(varName)) {
-        throw createTypeError(
-          s"Variable '$varName' is already defined in this scope.",
-          Some(loc)
-        )
+    case LetStatement(name, mut, optType, init, loc) =>
+      if (scope.contains(name)) throw createTypeError(s"Variable '$name' is already defined in this scope.", Some(loc))
+      val typedInit = checkExpression(init, scope)
+      val declared = optType match {
+        case Some(dt) => validateType(dt); dt
+        case None     => typedInit.typ
       }
-      val typedInit = checkExpression(init, context)
-
-      typeAnnotation.foreach { declaredType =>
-        validateType(declaredType)
-        if (!areTypesEqual(declaredType, typedInit.typ)) {
-          throw createTypeError(
-            s"Type mismatch for '$varName'. Expected ${typeToString(declaredType)} but got ${typeToString(typedInit.typ)}.",
-            Some(init.loc)
-          )
-        }
-      }
-
-      val finalType = typeAnnotation.getOrElse(typedInit.typ)
-
-      // Move the value from the initializer if it's not a copy type
-      if (!isCopyType(finalType)) {
-        handleMove(init, context)
-      }
-
-      // Add the new variable to the context with mutability from the AST
-      context(varName) = VarInfo(finalType, VarState.Owned, isMutable, loc)
-      TypedLetStatement(varName, isMutable, typedInit, loc)
+      if (!areTypesEqual(declared, typedInit.typ))
+        throw createTypeError(s"Type mismatch for '$name'. Expected ${typeToString(declared)} but got ${typeToString(typedInit.typ)}.", Some(init.loc))
+      // Moves for non-copy initializer
+      if (!isCopyType(declared)) handleMove(init, scope)
+      scope.declare(name, VarInfo(declared, VarState.Owned, mut, loc))
+      TypedLetStatement(name, mut, typedInit, loc)
 
     case ExpressionStatement(expr, loc) =>
-      val typedExpr = checkExpression(expr, context)
-      TypedExpressionStatement(typedExpr, loc)
+      val texpr = checkExpression(expr, scope)
+      TypedExpressionStatement(texpr, loc)
 
     case AssignmentStatement(target, value, loc) =>
-      val typedValue = checkExpression(value, context)
-      // Pass the typed value to checkPlaceExpression to avoid re-checking
-      val typedTarget =
-        checkPlaceExpression(target, context, requireMutable = true)
-
-      if (!areTypesEqual(typedTarget.typ, typedValue.typ)) {
-        throw createTypeError(
-          s"Cannot assign value of type ${typeToString(typedValue.typ)} to target of type ${typeToString(typedTarget.typ)}.",
-          Some(value.loc)
-        )
-      }
-
-      // Move the value if it's not a copy type
-      if (!isCopyType(typedValue.typ)) {
-        handleMove(value, context)
-      }
-      TypedAssignmentStatement(typedTarget, typedValue, loc)
+      val typedVal = checkExpression(value, scope)
+      val typedTarget = checkPlaceExpression(target, scope, requireMutable = true)
+      if (!areTypesEqual(typedTarget.typ, typedVal.typ))
+        throw createTypeError(s"Cannot assign value of type ${typeToString(typedVal.typ)} to target of type ${typeToString(typedTarget.typ)}.", Some(value.loc))
+      if (!isCopyType(typedVal.typ)) handleMove(value, scope)
+      TypedAssignmentStatement(typedTarget, typedVal, loc)
 
     case ReturnStatement(exprOpt, loc) =>
-      val typedExprOpt = exprOpt.map(checkExpression(_, context))
-      val returnType =
-        typedExprOpt.map(_.typ).getOrElse(UnitType())
-      val expected = expectedReturnType.getOrElse(
-        throw createTypeError(
-          "Return statement used outside of a function.",
-          Some(loc)
-        )
-      )
-      if (!areTypesEqual(returnType, expected)) {
-        throw createTypeError(
-          s"Return type mismatch. Expected ${typeToString(expected)} but got ${typeToString(returnType)}.",
-          exprOpt.map(_.loc).orElse(Some(loc))
-        )
+      val typedOpt = exprOpt.map(e => checkExpression(e, scope))
+      val retType = typedOpt.map(_.typ).getOrElse(UnitType())
+      val expected = expectedReturn.getOrElse(throw createTypeError("Return statement used outside of a function.", Some(loc)))
+      if (!areTypesEqual(retType, expected))
+        throw createTypeError(s"Return type mismatch. Expected ${typeToString(expected)} but got ${typeToString(retType)}.", exprOpt.map(_.loc).orElse(Some(loc)))
+      typedOpt.foreach { _ =>
+        if (!isCopyType(retType)) handleMove(exprOpt.get, scope)
       }
-
-      // Handle moving the return value
-      exprOpt.foreach { expr =>
-        if (!isCopyType(returnType)) {
-          handleMove(expr, context)
-        }
-      }
-      TypedReturnStatement(typedExprOpt, loc)
+      TypedReturnStatement(typedOpt, loc)
   }
 
-  /** Recursively checks an expression and returns its typed version. */
-  private def checkExpression(
-      expr: Expression,
-      context: LocalContext,
-      isManagedContext: Boolean = false
-  ): TypedExpression = expr match {
+  private def checkExpression(expr: Expression, scope: LocalScope, isManagedCtx: Boolean = false): TypedExpression = expr match {
     case IntLiteral(v, loc)  => TypedIntLiteral(v, IntType(), loc)
     case BoolLiteral(v, loc) => TypedBoolLiteral(v, BoolType(), loc)
 
     case Variable(name, loc) =>
-      val varInfo = context.getOrElse(
-        name,
-        throw createTypeError(
-          s"Variable '$name' not found in this scope.",
-          Some(loc)
-        )
-      )
-      checkTransition(varInfo.state, VarAction.Read) match {
-        case Left(error) =>
-          throw createTypeError(s"$error '$name'.", Some(loc))
-        case Right(_) =>
-          TypedVariable(name, varInfo.typ, loc)
+      val info = scope.get(name).getOrElse(throw createTypeError(s"Variable '$name' not found in this scope.", Some(loc)))
+      transition(info.state, VarAction.Read) match {
+        case Left(err) => throw createTypeError(s"$err '$name'.", Some(loc))
+        case Right(_)  => TypedVariable(name, info.typ, loc)
       }
 
-    case StructLiteral(typeName, values, loc) =>
-      if (isManagedContext) {
-        val (typedValues, structType, isResource) =
-          checkStructLiteral(
-            typeName,
-            values,
-            context,
-            loc,
-            isManagedContext = true
-          )
-        if (isResource) {
-          throw createTypeError(
-            s"Resource '$typeName' cannot be allocated as managed.",
-            Some(loc)
-          )
-        }
-        TypedManagedStructLiteral(
-          typeName,
-          typedValues,
-          ManagedType(structType),
-          loc
-        )
+    case StructLiteral(typeName, fields, loc) =>
+      if (isManagedCtx) {
+        val (typedFields, structType, isResource) = checkStructLiteral(typeName, fields, scope, loc, isManagedContext = true)
+        if (isResource) throw createTypeError(s"Resource '$typeName' cannot be allocated as managed.", Some(loc))
+        TypedManagedStructLiteral(typeName, typedFields, ManagedType(structType), loc)
       } else {
-        val (typedValues, structType, _) =
-          checkStructLiteral(
-            typeName,
-            values,
-            context,
-            loc,
-            isManagedContext = false
-          )
-        TypedStructLiteral(typeName, typedValues, structType, loc)
+        val (typedFields, structType, isResource) = checkStructLiteral(typeName, fields, scope, loc, isManagedContext = false)
+        TypedStructLiteral(typeName, typedFields, structType, loc)
       }
 
-    case ManagedStructLiteral(typeName, values, loc) =>
-      val (typedValues, structType, isResource) =
-        checkStructLiteral(
-          typeName,
-          values,
-          context,
-          loc,
-          isManagedContext = true
-        )
-      if (isResource) {
-        throw createTypeError(
-          s"Resource '$typeName' cannot be allocated as managed.",
-          Some(loc)
-        )
-      }
-      TypedManagedStructLiteral(
-        typeName,
-        typedValues,
-        ManagedType(structType),
-        loc
-      )
+    case ManagedStructLiteral(typeName, fields, loc) =>
+      val (typedFields, structType, isResource) = checkStructLiteral(typeName, fields, scope, loc, isManagedContext = true)
+      if (isResource) throw createTypeError(s"Resource '$typeName' cannot be allocated as managed.", Some(loc))
+      TypedManagedStructLiteral(typeName, typedFields, ManagedType(structType), loc)
 
     case FieldAccess(obj, fieldName, loc) =>
-      val typedObj = checkExpression(obj, context)
-      val (baseType, isObjManaged) = typedObj.typ match {
-        case st @ StructNameType(_, _)             => (st, false)
+      val tObj = checkExpression(obj, scope)
+      val (baseType, isManaged) = tObj.typ match {
+        case st: StructNameType => (st, false)
         case ManagedType(inner: StructNameType, _) => (inner, true)
-        case ManagedType(inner, _) =>
-          throw createTypeError(
-            s"Field access on managed type is only allowed for structs. Found ${typeToString(ManagedType(inner))}",
-            Some(obj.loc)
-          )
-        case _ =>
-          throw createTypeError(
-            s"Field access is only allowed on structs and resources. Found type ${typeToString(typedObj.typ)}.",
-            Some(obj.loc)
-          )
+        case ManagedType(inner, _) => throw createTypeError(s"Field access on managed type is only allowed for structs. Found ${typeToString(ManagedType(inner))}", Some(obj.loc))
+        case _ => throw createTypeError(s"Field access is only allowed on structs and resources. Found type ${typeToString(tObj.typ)}.", Some(obj.loc))
       }
-
-      val structName = baseType.name
-      val rawFieldType = getFieldType(structName, fieldName, loc)
-
-      val finalFieldType =
-        if (isObjManaged && isStructOrResourceType(rawFieldType)) {
-          ManagedType(rawFieldType)
-        } else {
-          rawFieldType
-        }
-      TypedFieldAccess(typedObj, fieldName, finalFieldType, loc)
+      val rawFieldType = getFieldType(baseType.name, fieldName, loc)
+      val finalType = if (isManaged && isStructOrResourceType(rawFieldType)) ManagedType(rawFieldType) else rawFieldType
+      TypedFieldAccess(tObj, fieldName, finalType, loc)
 
     case FunctionCall(funcExpr, args, loc) =>
       val funcName = funcExpr match {
-        case Variable(name, _) => name
-        case _ =>
-          throw createTypeError(
-            "Dynamic function calls are not supported.",
-            Some(funcExpr.loc)
-          )
+        case Variable(n, _) => n
+        case _ => throw createTypeError("Dynamic function calls are not supported.", Some(funcExpr.loc))
       }
+      val funcDef = globalContext.functions.getOrElse(funcName, throw createTypeError(s"Function '$funcName' not found.", Some(funcExpr.loc)))
+      if (args.length != funcDef.params.length)
+        throw createTypeError(s"Function '$funcName' expects ${funcDef.params.length} arguments, but ${args.length} were provided.", Some(loc))
 
-      val funcDef = globalContext.functions.getOrElse(
-        funcName,
-        throw createTypeError(
-          s"Function '$funcName' not found.",
-          Some(funcExpr.loc)
-        )
-      )
+      val typedArgs = args.zip(funcDef.params).map { case (aExpr, param) =>
+        val tArg = checkExpression(aExpr, scope)
+        if (!areTypesEqual(tArg.typ, param.typ))
+          throw createTypeError(s"Type mismatch for argument to parameter '${param.name}'. Expected ${typeToString(param.typ)} but got ${typeToString(tArg.typ)}.", Some(aExpr.loc))
 
-      if (args.length != funcDef.params.length) {
-        throw createTypeError(
-          s"Function '$funcName' expects ${funcDef.params.length} arguments, but ${args.length} were provided.",
-          Some(loc)
-        )
-      }
-
-      // Check each argument against its parameter
-      val typedArgs = args.zip(funcDef.params).map { case (argExpr, param) =>
-        val typedArg = checkExpression(argExpr, context)
-        if (!areTypesEqual(typedArg.typ, param.typ)) {
-          throw createTypeError(
-            s"Type mismatch for argument to parameter '${param.name}'. Expected ${typeToString(
-                param.typ
-              )} but got ${typeToString(typedArg.typ)}.",
-            Some(argExpr.loc)
-          )
-        }
-
-        // Ownership checks based on parameter mode
         param.mode match {
-          case ParamMode.Move(_) =>
-            if (!isCopyType(typedArg.typ)) {
-              handleMove(argExpr, context)
-            }
-          case ParamMode.Ref =>
-            checkBorrow(argExpr, context, VarAction.BorrowRead)
-          case ParamMode.Inout =>
-            checkBorrow(argExpr, context, VarAction.BorrowWrite)
+          case ParamMode.Move(_) => if (!isCopyType(tArg.typ)) handleMove(aExpr, scope)
+          case ParamMode.Ref      => checkBorrow(aExpr, scope, VarAction.BorrowRead)
+          case ParamMode.Inout    => checkBorrow(aExpr, scope, VarAction.BorrowWrite)
         }
-        typedArg
+        tArg
       }
-
       TypedFunctionCall(funcName, typedArgs, funcDef.returnType, loc)
 
-    case PrintlnExpression(formatString, args, loc) =>
-      // Type check all arguments - they can be any type
-      val typedArgs = args.map(checkExpression(_, context))
-      // println! always returns unit
-      TypedPrintlnExpression(formatString, typedArgs, UnitType(), loc)
+    case PrintlnExpression(fmt, args, loc) =>
+      val targs = args.map(a => checkExpression(a, scope))
+      TypedPrintlnExpression(fmt, targs, UnitType(), loc)
 
     case BinaryExpression(left, op, right, loc) =>
-      val typedLeft = checkExpression(left, context)
-      val typedRight = checkExpression(right, context)
-
-      val resultType = op match {
+      val tl = checkExpression(left, scope)
+      val tr = checkExpression(right, scope)
+      val resType = op match {
         case BinaryOp.Add | BinaryOp.Sub =>
-          // Arithmetic operators require both operands to be int and return int
-          if (
-            !areTypesEqual(typedLeft.typ, IntType()) || !areTypesEqual(
-              typedRight.typ,
-              IntType()
-            )
-          ) {
-            throw createTypeError(
-              s"Arithmetic operator ${binaryOpToString(op)} requires both operands to be int, but got ${typeToString(
-                  typedLeft.typ
-                )} and ${typeToString(typedRight.typ)}.",
-              Some(loc)
-            )
-          }
+          if (!areTypesEqual(tl.typ, IntType()) || !areTypesEqual(tr.typ, IntType()))
+            throw createTypeError(s"Arithmetic operator ${binaryOpToString(op)} requires int operands, but got ${typeToString(tl.typ)} and ${typeToString(tr.typ)}.", Some(loc))
           IntType()
-
         case BinaryOp.Lt | BinaryOp.Le | BinaryOp.Gt | BinaryOp.Ge =>
-          // Comparison operators require both operands to be int and return bool
-          if (
-            !areTypesEqual(typedLeft.typ, IntType()) || !areTypesEqual(
-              typedRight.typ,
-              IntType()
-            )
-          ) {
-            throw createTypeError(
-              s"Comparison operator ${binaryOpToString(op)} requires both operands to be int, but got ${typeToString(
-                  typedLeft.typ
-                )} and ${typeToString(typedRight.typ)}.",
-              Some(loc)
-            )
-          }
+          if (!areTypesEqual(tl.typ, IntType()) || !areTypesEqual(tr.typ, IntType()))
+            throw createTypeError(s"Comparison operator ${binaryOpToString(op)} requires int operands, but got ${typeToString(tl.typ)} and ${typeToString(tr.typ)}.", Some(loc))
           BoolType()
-
         case BinaryOp.Eq | BinaryOp.Ne =>
-          // Equality operators require both operands to be the same type and return bool
-          if (!areTypesEqual(typedLeft.typ, typedRight.typ)) {
-            throw createTypeError(
-              s"Equality operator ${binaryOpToString(op)} requires both operands to be the same type, but got ${typeToString(
-                  typedLeft.typ
-                )} and ${typeToString(typedRight.typ)}.",
-              Some(loc)
-            )
-          }
-          // Only allow equality on copy types for simplicity
-          if (!isCopyType(typedLeft.typ)) {
-            throw createTypeError(
-              s"Equality operator ${binaryOpToString(op)} is only supported for copy types (int, bool, unit), but got ${typeToString(typedLeft.typ)}.",
-              Some(loc)
-            )
-          }
+          if (!areTypesEqual(tl.typ, tr.typ))
+            throw createTypeError(s"Equality operator ${binaryOpToString(op)} requires same typed operands, but got ${typeToString(tl.typ)} and ${typeToString(tr.typ)}.", Some(loc))
+          if (!isCopyType(tl.typ))
+            throw createTypeError(s"Equality operator ${binaryOpToString(op)} is only supported for copy types (int, bool, unit), but got ${typeToString(tl.typ)}.", Some(loc))
           BoolType()
       }
-
-      TypedBinaryExpression(typedLeft, op, typedRight, resultType, loc)
+      TypedBinaryExpression(tl, op, tr, resType, loc)
   }
 
-  /** Checks if an expression is a valid "place" (l-value) for assignment or
-    * mutable borrowing.
-    */
-  private def checkPlaceExpression(
-      expr: Expression,
-      context: LocalContext,
-      requireMutable: Boolean
-  ): TypedExpression = expr match {
+  // Place expression (l-value)
+  private def checkPlaceExpression(expr: Expression, scope: LocalScope, requireMutable: Boolean): TypedExpression = expr match {
     case Variable(name, loc) =>
-      val varInfo = context.getOrElse(
-        name,
-        throw createTypeError(s"Variable '$name' not found.", Some(loc))
-      )
-      if (requireMutable && !varInfo.isMutable) {
-        throw createTypeError(
-          s"Cannot assign to immutable variable '$name'. Use 'let mut' to declare mutable variables or 'inout' for mutable parameters.",
-          Some(loc)
-        )
-      }
-      checkTransition(varInfo.state, VarAction.Read) match {
-        case Left(error) =>
-          throw createTypeError(s"Cannot use '$name' as it has been moved.", Some(loc))
-        case Right(_) =>
-          TypedVariable(name, varInfo.typ, loc)
+      val info = scope.get(name).getOrElse(throw createTypeError(s"Variable '$name' not found.", Some(loc)))
+      if (requireMutable && !info.isMutable)
+        throw createTypeError(s"Cannot assign to immutable variable '$name'. Use 'let mut' to declare mutable variables or 'inout' for mutable parameters.", Some(loc))
+      transition(info.state, VarAction.Read) match {
+        case Left(err) => throw createTypeError(s"Cannot use '$name' as it has been moved.", Some(loc))
+        case Right(_)  => TypedVariable(name, info.typ, loc)
       }
 
     case FieldAccess(obj, fieldName, loc) =>
-      // To modify a field, the container must be a mutable place.
-      val typedObj = checkPlaceExpression(obj, context, requireMutable)
-      val (baseType, isObjManaged) = typedObj.typ match {
-        case st @ StructNameType(_, _)             => (st, false)
+      // The container must be a mutable place; recurse to validate
+      val typedObjPlace = checkPlaceExpression(obj, scope, requireMutable)
+      val (baseType, isManaged) = typedObjPlace.typ match {
+        case st: StructNameType => (st, false)
         case ManagedType(inner: StructNameType, _) => (inner, true)
-        case ManagedType(inner, _) =>
-          throw createTypeError(
-            s"Field access on managed type is only allowed for structs. Found ${typeToString(ManagedType(inner))}",
-            Some(obj.loc)
-          )
-        case _ =>
-          throw createTypeError(
-            s"Field access is only allowed on structs and resources. Found type ${typeToString(typedObj.typ)}.",
-            Some(obj.loc)
-          )
+        case ManagedType(inner, _) => throw createTypeError(s"Field access on managed type is only allowed for structs. Found ${typeToString(ManagedType(inner))}", Some(obj.loc))
+        case _ => throw createTypeError(s"Field access is only allowed on structs and resources. Found type ${typeToString(typedObjPlace.typ)}.", Some(obj.loc))
       }
-      val structName = baseType.name
-      val rawFieldType = getFieldType(structName, fieldName, loc)
+      val raw = getFieldType(baseType.name, fieldName, loc)
+      val finalType = if (isManaged && isStructOrResourceType(raw)) ManagedType(raw) else raw
+      TypedFieldAccess(typedObjPlace, fieldName, finalType, loc)
 
-      val finalFieldType =
-        if (isObjManaged && isStructOrResourceType(rawFieldType)) {
-          ManagedType(rawFieldType)
-        } else {
-          rawFieldType
-        }
-      TypedFieldAccess(typedObj, fieldName, finalFieldType, loc)
-
-    case _ =>
-      throw createTypeError(
-        "Expression is not a valid assignment target.",
-        Some(expr.loc)
-      )
+    case _ => throw createTypeError("Expression is not a valid assignment target.", Some(expr.loc))
   }
 
-  /** Marks a variable as moved, enforcing ownership rules. */
-  private def handleMove(
-      sourceExpr: Expression,
-      context: LocalContext
-  ): Unit = {
-    sourceExpr match {
-      case Variable(name, loc) =>
-        val varInfo = context.getOrElse(
-          name,
-          throw new IllegalStateException(
-            "Variable disappeared during move check"
-          )
-        )
-        checkTransition(varInfo.state, VarAction.Move) match {
-          case Left(error) =>
-            throw createTypeError(s"$error '$name'.", Some(loc))
-          case Right(newState) =>
-            context(name) = varInfo.copy(state = newState)
-        }
-      case _ =>
-    }
+  private def handleMove(sourceExpr: Expression, scope: LocalScope): Unit = sourceExpr match {
+    case Variable(name, loc) =>
+      val info = scope.get(name).getOrElse(throw new IllegalStateException("Variable disappeared during move check"))
+      transition(info.state, VarAction.Move) match {
+        case Left(err) => throw createTypeError(s"$err '$name'.", Some(loc))
+        case Right(newState) => scope.update(name, info.copy(state = newState))
+      }
+    case FieldAccess(obj, _, _) =>
+      // Moving from a field is not implemented for now; it's a complex scenario (requires ownership of container).
+      // ignore non-variable moves for now.
+      ()
+    case _ => ()
   }
 
-  /** Checks if a borrow is valid based on the variable's current state. */
-  private def checkBorrow(
-      argExpr: Expression,
-      context: LocalContext,
-      action: VarAction
-  ): Unit = {
-    argExpr match {
-      case Variable(name, loc) =>
-        val varInfo = context.getOrElse(
-          name,
-          throw new IllegalStateException(
-            "Variable disappeared during borrow check"
-          )
-        )
+  private def checkBorrow(arg: Expression, scope: LocalScope, action: VarAction): Unit = arg match {
+    case Variable(name, loc) =>
+      val info = scope.get(name).getOrElse(throw new IllegalStateException("Variable disappeared during borrow check"))
+      if (action == VarAction.BorrowWrite && !info.isMutable)
+        throw createTypeError(s"Cannot mutably borrow immutable variable '$name'. Mark it as 'mut' or pass it to an 'inout' parameter.", Some(loc))
+      transition(info.state, action) match {
+        case Left(err) => throw createTypeError(s"$err '$name'.", Some(loc))
+        case Right(newState) =>
+          // We do not mutate VarState here to emulate temporary borrow lifetimes (no lifetimes implemented).
+          ()
+      }
 
-        if (action == VarAction.BorrowWrite && !varInfo.isMutable) {
-          throw createTypeError(
-            s"Cannot mutably borrow immutable variable '$name'. Mark it as 'mut' or pass it to an 'inout' parameter.",
-            Some(loc)
-          )
-        }
+    case FieldAccess(obj, _, _) =>
+      checkBorrow(obj, scope, action)
 
-        checkTransition(varInfo.state, action) match {
-          case Left(error) =>
-            throw createTypeError(s"$error '$name'.", Some(loc))
-          case Right(_) =>
-        }
-      case FieldAccess(obj, _, loc) =>
-        checkBorrow(obj, context, action)
-      case _ =>
-        throw createTypeError(
-          "Cannot borrow from a temporary value.",
-          Some(argExpr.loc)
-        )
-    }
+    case _ => throw createTypeError("Cannot borrow from a temporary value.", Some(arg.loc))
   }
 
-  /** Helper to check struct literal fields and types. */
   private def checkStructLiteral(
       typeName: String,
       values: List[(String, Expression)],
-      context: LocalContext,
+      scope: LocalScope,
       loc: SourceLocation,
       isManagedContext: Boolean
   ): (List[(String, TypedExpression)], StructNameType, Boolean) = {
-    val definition: Either[StructDef, ResourceDef] =
-      globalContext.structs
-        .get(typeName)
-        .map(Left(_))
-        .orElse(globalContext.resources.get(typeName).map(Right(_)))
-        .getOrElse(
-          throw createTypeError(
-            s"Unknown struct or resource '$typeName'.",
-            Some(loc)
-          )
-        )
-
-    val (expectedFieldsList, isResource) = definition match {
-      case Left(structDef)    => (structDef.fields, false)
-      case Right(resourceDef) => (resourceDef.fields, true)
-    }
-
-    val providedFields = values.map(_._1).toSet
-    val expectedFields = expectedFieldsList.map(_._1).toSet
-    if (providedFields != expectedFields) {
-      throw createTypeError(
-        s"'$typeName' initialization has incorrect fields. Expected: ${expectedFields
-            .mkString(", ")}, Got: ${providedFields.mkString(", ")}.",
-        Some(loc)
+    val defnEither: Either[StructDef, ResourceDef] =
+      globalContext.structs.get(typeName).map(Left(_)).orElse(globalContext.resources.get(typeName).map(Right(_))).getOrElse(
+        throw createTypeError(s"Unknown struct or resource '$typeName'.", Some(loc))
       )
+
+    val (expectedFields, isResource) = defnEither match {
+      case Left(sd) => (sd.fields, false)
+      case Right(rd) => (rd.fields, true)
     }
 
-    val typedValues = values.map { case (fieldName, fieldExpr) =>
-      val typedFieldExpr = checkExpression(fieldExpr, context, isManagedContext)
-      val expectedFieldType = expectedFieldsList.find(_._1 == fieldName).get._2
+    val provided = values.map(_._1).toSet
+    val expectedSet = expectedFields.map(_._1).toSet
+    if (provided != expectedSet)
+      throw createTypeError(s"'$typeName' initialization has incorrect fields. Expected: ${expectedSet.mkString(", ")}, Got: ${provided.mkString(", ")}.", Some(loc))
 
-      val finalExpectedType =
-        if (isManagedContext && isStructOrResourceType(expectedFieldType)) {
-          ManagedType(expectedFieldType)
-        } else {
-          expectedFieldType
-        }
-
-      if (!areTypesEqual(typedFieldExpr.typ, finalExpectedType)) {
-        throw createTypeError(
-          s"Type mismatch for field '$fieldName' in '$typeName' initialization. Expected ${typeToString(
-              finalExpectedType
-            )} but got ${typeToString(typedFieldExpr.typ)}.",
-          Some(fieldExpr.loc)
-        )
-      }
-      if (!isCopyType(typedFieldExpr.typ)) {
-        handleMove(fieldExpr, context)
-      }
-      (fieldName, typedFieldExpr)
+    val typed = values.map { case (fname, fexpr) =>
+      val texpr = checkExpression(fexpr, scope, isManagedContext)
+      val expectedType = expectedFields.find(_._1 == fname).get._2
+      val finalExpected = if (isManagedContext && isStructOrResourceType(expectedType)) ManagedType(expectedType) else expectedType
+      if (!areTypesEqual(texpr.typ, finalExpected))
+        throw createTypeError(s"Type mismatch for field '$fname' in '$typeName' initialization. Expected ${typeToString(finalExpected)} but got ${typeToString(texpr.typ)}.", Some(fexpr.loc))
+      if (!isCopyType(texpr.typ)) handleMove(fexpr, scope)
+      (fname, texpr)
     }
-    (typedValues, StructNameType(typeName), isResource)
+    (typed, StructNameType(typeName), isResource)
   }
 
-  private def getFieldType(
-      structName: String,
-      fieldName: String,
-      loc: SourceLocation
-  ): Type = {
-    val definition: Either[StructDef, ResourceDef] =
-      globalContext.structs
-        .get(structName)
-        .map(Left(_))
-        .orElse(globalContext.resources.get(structName).map(Right(_)))
-        .getOrElse(
-          // This should not happen if validateType is called correctly
-          throw new IllegalStateException(
-            s"Definition for '$structName' not found in global context."
-          )
-        )
-    val fields = definition match {
-      case Left(s)  => s.fields
-      case Right(r) => r.fields
-    }
-    fields.find(_._1 == fieldName) match {
-      case Some((_, fieldType)) => fieldType
-      case None =>
-        throw createTypeError(
-          s"Type '$structName' has no field named '$fieldName'.",
-          Some(loc)
-        )
-    }
+  private def getFieldType(structName: String, fieldName: String, loc: SourceLocation): Type = {
+    val definition = globalContext.structs.get(structName).map(Left(_)).orElse(globalContext.resources.get(structName).map(Right(_))).getOrElse(
+      throw new IllegalStateException(s"Definition for '$structName' not found in global context.")
+    )
+    val fields = definition match { case Left(s) => s.fields; case Right(r) => r.fields }
+    fields.find(_._1 == fieldName).map(_._2).getOrElse(throw createTypeError(s"Type '$structName' has no field named '$fieldName'.", Some(loc)))
   }
 
-  /** Helper to check if a type is a struct or resource. */
   private def isStructOrResourceType(t: Type): Boolean = t match {
-    case StructNameType(name, _) =>
-      globalContext.structs.contains(name) || globalContext.resources.contains(
-        name
-      )
+    case StructNameType(name, _) => globalContext.structs.contains(name) || globalContext.resources.contains(name)
     case _ => false
   }
 
-  /** Checks if a type name exists in the global context. */
   private def validateType(t: Type): Unit = t match {
     case StructNameType(name, loc) =>
-      if (
-        !globalContext.structs.contains(name) && !globalContext.resources
-          .contains(name)
-      ) {
+      if (!globalContext.structs.contains(name) && !globalContext.resources.contains(name))
         throw createTypeError(s"Unknown type '$name'.", loc)
-      }
     case ManagedType(inner, _) => validateType(inner)
-    case _                     => // Primitive types are always valid
+    case _ => ()
   }
 
-  /** Converts a Type AST to a string for error messages. */
   private def typeToString(t: Type): String = t match {
-    case IntType(_)              => "int"
-    case BoolType(_)             => "bool"
-    case UnitType(_)             => "unit"
-    case StructNameType(name, _) => name
-    case ManagedType(inner, _)   => s"managed ${typeToString(inner)}"
+    case IntType(_) => "int"
+    case BoolType(_) => "bool"
+    case UnitType(_) => "unit"
+    case StructNameType(n, _) => n
+    case ManagedType(inner, _) => s"managed ${typeToString(inner)}"
   }
 
-  /** Checks for type equality, ignoring source locations. */
   private def areTypesEqual(t1: Type, t2: Type): Boolean = (t1, t2) match {
-    case (IntType(_), IntType(_))                       => true
-    case (BoolType(_), BoolType(_))                     => true
-    case (UnitType(_), UnitType(_))                     => true
+    case (IntType(_), IntType(_)) => true
+    case (BoolType(_), BoolType(_)) => true
+    case (UnitType(_), UnitType(_)) => true
     case (StructNameType(n1, _), StructNameType(n2, _)) => n1 == n2
-    case (ManagedType(it1, _), ManagedType(it2, _)) => areTypesEqual(it1, it2)
-    case _                                          => false
+    case (ManagedType(i1, _), ManagedType(i2, _)) => areTypesEqual(i1, i2)
+    case _ => false
   }
 
-  /** Determines if a type is a simple "Copy" type (like primitives). */
   private def isCopyType(t: Type): Boolean = t match {
     case IntType(_) | BoolType(_) | UnitType(_) => true
-    case ManagedType(_, _) =>
-      true // Managed types are handles that can be copied
-    case _ => false // Structs, Resources are Move types
+    case ManagedType(_, _) => true
+    case _ => false
   }
 
-  /** Converts a BinaryOp to a string for error messages. */
   private def binaryOpToString(op: BinaryOp): String = op match {
     case BinaryOp.Add => "+"
     case BinaryOp.Sub => "-"
