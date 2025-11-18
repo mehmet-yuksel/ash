@@ -1,321 +1,175 @@
 package ash.parser
 
 import scala.util.matching.Regex
-import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable
 
-// --- Data Structures ---
-case class SourceLocation(
-    line: Int, // 1-indexed line number
-    column: Int, // 1-indexed column number
-    startPosition: Int, // 0-indexed start offset in input string
-    endPosition: Int // 0-indexed end offset in input string (exclusive)
-)
+case class SourceLocation(line: Int, column: Int, startPosition: Int, endPosition: Int)
+case class Token(typ: String, lexeme: String, loc: SourceLocation)
 
-case class Token(
-    typ: String, // Renamed from 'type' to avoid keyword clash in some contexts
-    lexeme: String,
-    loc: SourceLocation
-)
+class LexerError(msg: String) extends RuntimeException(msg)
+class ParserError(msg: String) extends RuntimeException(msg)
 
-// --- Error Handling ---
 object ErrorUtils {
   def generateErrorPreview(input: String, loc: SourceLocation): String = {
-    // Handle different line ending styles and ensure consistent splitting
+    // Handle different line ending styles
     val normalizedInput = input.replace("\r\n", "\n").replace("\r", "\n")
-    val lines = normalizedInput.split("\n", -1) // -1 to keep empty trailing strings
-    
-    // Adjust for 0-indexed lines array vs 1-indexed loc.line
+    val lines = normalizedInput.split("\n", -1)
+
     val errorLine = if (loc.line > 0 && loc.line <= lines.length) {
       lines(loc.line - 1)
     } else {
-      s"<line ${loc.line} out of range: only ${lines.length} lines available>"
+      ""
     }
-    
-    // Adjust for 0-indexed repeat vs 1-indexed loc.column
-    // Ensure we don't go negative and handle cases where column is beyond line length
+
     val column = (loc.column - 1).max(0)
+    // Ensure caret doesn't go way past the line if line is empty or short
     val caretLine = " " * column.min(errorLine.length) + "^"
-    
-    // Show line number in the preview for better context
+
     val lineNumber = f"${loc.line}%3d: "
-    val paddingSpaces = " " * lineNumber.length
-    
+    val padding = " " * lineNumber.length
+
     s"""
 Error at line ${loc.line}, column ${loc.column}:
 $lineNumber$errorLine
-$paddingSpaces$caretLine"""
+$padding$caretLine"""
+  }
+
+  def error(msg: String, loc: SourceLocation, input: String): Nothing = {
+    val preview = generateErrorPreview(input, loc)
+    throw new ParserError(s"$msg$preview")
   }
 }
 
-class LexerError(message: String) extends RuntimeException(message)
-class ParserError(message: String) extends RuntimeException(message)
-
-// --- Lexer ---
-private case class TokenDefinition(typ: String, pattern: Regex)
+private case class TokenDef(typ: String, pattern: Regex)
 
 class Lexer(input: String) {
-  private var tokenDefinitionsList: List[TokenDefinition] = List.empty
-  private var position: Int = 0
-  private var currentLine: Int = 1
-  private var currentLineStartPos: Int = 0
+  private val rules = mutable.Buffer[TokenDef]()
 
-  /** Defines a token type with a regex pattern. Patterns are tried in the order
-    * they are added. For patterns that could match the same prefix, ensure more
-    * specific patterns (e.g., keywords) are added before more general ones
-    * (e.g., identifiers) if they can have the same length. The lexer
-    * prioritizes the longest match. If multiple patterns yield the longest
-    * match of the same length, the one defined earliest (added first to this
-    * lexer instance) is chosen.
-    */
-  def token(typ: String, patternString: String): Lexer = {
-    // Regex matching from the beginning of a string slice
-    tokenDefinitionsList =
-      tokenDefinitionsList :+ TokenDefinition(typ, patternString.r)
+  def token(typ: String, regex: String): Lexer = {
+    // ^ anchor ensures we match from the current position
+    rules += TokenDef(typ, s"^($regex)".r)
     this
   }
 
   def lex(): Vector[Token] = {
-    val result = ArrayBuffer.empty[Token]
-    position = 0
-    currentLine = 1
-    currentLineStartPos = 0
+    var pos = 0
+    var line = 1
+    var lineStart = 0
+    val tokens = mutable.Buffer[Token]()
 
-    while (position < input.length) {
-      var bestMatch: Option[(TokenDefinition, Regex.Match)] = None
-      val currentSubstring = input.substring(position)
+    while (pos < input.length) {
+      val tail = input.substring(pos)
 
-      // Find the best (longest) match among all token definitions
-      for (tokenDef <- tokenDefinitionsList) {
-        tokenDef.pattern.findPrefixMatchOf(currentSubstring) match {
-          case Some(m) =>
-            if (bestMatch.forall(_._2.matched.length < m.matched.length)) {
-              bestMatch = Some((tokenDef, m))
-            } else if (
-              bestMatch.isDefined && bestMatch.get._2.matched.length == m.matched.length
-            ) {
-              // If same length, the one defined earlier (already in bestMatch) wins.
-              // This loop structure naturally handles it if tokenDefinitionsList is iterated in definition order.
-            }
-          case None => // No match for this definition
-        }
-      }
+      // Find longest match
+      val matchResult = rules.view
+        .map(r => (r, r.pattern.findFirstMatchIn(tail)))
+        .collect { case (r, Some(m)) => (r, m) }
+        .maxByOption(_._2.end) // Pick the one that consumes the most characters
 
-      bestMatch match {
-        case Some((matchedTokenDefinition, regexMatch)) =>
-          val lexeme = regexMatch.matched
-          val tokenStartPosition = position
-          val tokenEndPosition = tokenStartPosition + lexeme.length
+      matchResult match {
+        case Some((rule, m)) =>
+          val text = m.group(1)
+          val len = text.length
 
-          if (!matchedTokenDefinition.typ.startsWith("$SKIP")) {
-            result += Token(
-              matchedTokenDefinition.typ,
-              lexeme,
-              SourceLocation(
-                line = currentLine,
-                column = tokenStartPosition - currentLineStartPos + 1,
-                startPosition = tokenStartPosition,
-                endPosition = tokenEndPosition
-              )
+          if (!rule.typ.startsWith("$SKIP")) {
+            tokens += Token(
+              rule.typ,
+              text,
+              SourceLocation(line, pos - lineStart + 1, pos, pos + len)
             )
           }
 
-          position += lexeme.length
-
-          var i = 0
-          while (i < lexeme.length) {
-            if (lexeme(i) == '\n') {
-              currentLine += 1
-              currentLineStartPos = tokenStartPosition + i + 1
-            }
-            i += 1
+          pos += len
+          val newLines = text.count(_ == '\n')
+          if (newLines > 0) {
+            line += newLines
+            // Find the position of the last newline in the match relative to current pos
+            lineStart = pos - text.reverse.indexOf('\n') - 1
           }
 
         case None =>
-          val errorChar = input(position)
-          val errorColumn = position - currentLineStartPos + 1
-          val loc = SourceLocation(
-            line = currentLine,
-            column = errorColumn,
-            startPosition = position,
-            endPosition = position + 1
-          )
-          val preview = ErrorUtils.generateErrorPreview(input, loc)
-          throw new LexerError(
-            s"Unexpected character '$errorChar' at line $currentLine, column $errorColumn\n$preview"
+          ErrorUtils.error(
+            s"Unexpected character '${input(pos)}'",
+            SourceLocation(line, pos - lineStart + 1, pos, pos + 1),
+            input
           )
       }
     }
 
-    result += Token(
-      "EOF",
-      "",
-      SourceLocation(
-        line = currentLine,
-        column = position - currentLineStartPos + 1,
-        startPosition = position,
-        endPosition = position
-      )
-    )
-    result.toVector
+    tokens += Token("EOF", "", SourceLocation(line, pos - lineStart + 1, pos, pos))
+    tokens.toVector
   }
 }
 
-// --- Parser ---
-type PrefixParselet[T] = (Parser[T], Token) => T
-type InfixParselet[T] = (Parser[T], T, Token) => T
+class Parser[T](private val input: String, lexer: Lexer) {
+  private val tokens = lexer.lex()
+  private var current = 0
 
-class Parser[T](private val originalInput: String, lexer: Lexer) {
-  private val tokens: Vector[Token] = lexer.lex()
-  private var current: Int = 0 // Index of the next token to consume
+  type PrefixFn = Token => T
+  type InfixFn = (T, Token) => T
 
-  private val prefixParselets
-      : scala.collection.mutable.Map[String, PrefixParselet[T]] =
-    scala.collection.mutable.Map.empty
-  private val infixParselets
-      : scala.collection.mutable.Map[String, (Int, InfixParselet[T])] =
-    scala.collection.mutable.Map.empty
+  private val prefixParselets = mutable.Map[String, PrefixFn]()
+  private val infixParselets = mutable.Map[String, (Int, InfixFn)]()
 
-  if (tokens.isEmpty || tokens.last.typ != "EOF") {
-    // This case should ideally be prevented by the Lexer always adding EOF.
-    throw new IllegalArgumentException(
-      "Token stream must end with an EOF token."
-    )
+  def registerPrefix(typ: String, fn: PrefixFn): Unit = prefixParselets(typ) = fn
+  def registerInfix(typ: String, prec: Int, fn: InfixFn): Unit = infixParselets(typ) = (prec, fn)
+
+  def peek(): Token = {
+    if (current < tokens.length) tokens(current) else tokens.last
   }
 
-  def prefix(tokenType: String, parselet: PrefixParselet[T]): Parser[T] = {
-    prefixParselets(tokenType) = parselet
-    this
+  def prev(): Token = {
+    if (current > 0) tokens(current - 1) else tokens.head
   }
 
-  def infix(
-      tokenType: String,
-      precedence: Int,
-      parselet: InfixParselet[T]
-  ): Parser[T] = {
-    infixParselets(tokenType) = (precedence, parselet)
-    this
+  def advance(): Token = {
+    val t = peek()
+    if (current < tokens.length) current += 1
+    t
+  }
+
+  def consume(typ: String): Token = {
+    if (check(typ)) advance()
+    else ErrorUtils.error(s"Expected '$typ', but got '${peek().typ}'", peek().loc, input)
+  }
+
+  def check(typ: String): Boolean = peek().typ == typ
+
+  def matchToken(typ: String): Boolean = {
+    if (check(typ)) { advance(); true } else false
+  }
+
+  // Parses: item, item, item <EndToken>
+  def parseList[A](endToken: String, parseItem: () => A): List[A] = {
+    val list = mutable.Buffer[A]()
+    if (!check(endToken)) {
+      list += parseItem()
+      while (matchToken("COMMA")) {
+        list += parseItem()
+      }
+    }
+    consume(endToken)
+    list.toList
   }
 
   def parseExpression(precedence: Int = 0): T = {
-    var token = advance() // Consumes the first token of the expression
+    val t = advance()
 
-    if (token.typ == "EOF") {
-      val errorLoc =
-        if (current == 1) { // EOF was the very first token advanced
-          token.loc
-        } else { // current > 1, meaning tokens(current-2) was the token before EOF
-          val lastNonEofToken = tokens(current - 2)
-          SourceLocation(
-            line = lastNonEofToken.loc.line,
-            column = lastNonEofToken.loc.column + lastNonEofToken.lexeme.length,
-            startPosition = lastNonEofToken.loc.endPosition,
-            endPosition = lastNonEofToken.loc.endPosition
-          )
-        }
-      val preview = ErrorUtils.generateErrorPreview(originalInput, errorLoc)
-      throw new ParserError(
-        s"Unexpected end of input. Expected an expression at line ${errorLoc.line}, column ${errorLoc.column}\n$preview"
-      )
-    }
+    val prefix = prefixParselets.getOrElse(t.typ,
+      ErrorUtils.error(s"Unexpected token '${t.lexeme}' at start of expression.", t.loc, input)
+    )
 
-    val prefix = prefixParselets.get(token.typ)
-    if (prefix.isEmpty) {
-      val preview = ErrorUtils.generateErrorPreview(originalInput, token.loc)
-      throw new ParserError(
-        s"Unexpected token '${token.lexeme}' (type: ${token.typ}). No prefix parselet defined at line ${token.loc.line}, column ${token.loc.column}\n$preview"
-      )
-    }
+    var left = prefix(t)
 
-    var left = prefix.get(this, token)
-
-    while (precedence < getPrecedence()) {
-      token = advance() // Consumes the infix operator token
-
-      val infixEntry = infixParselets.get(token.typ)
-      // This should ideally not happen if getPrecedence is correct,
-      // as getPrecedence would return 0 for a token with no infix parselet.
-      if (infixEntry.isEmpty) {
-        val preview = ErrorUtils.generateErrorPreview(originalInput, token.loc)
-        throw new ParserError(
-          s"Token '${token.lexeme}' (type: ${token.typ}) was encountered in an infix position, but no corresponding infix parselet is defined at line ${token.loc.line}, column ${token.loc.column}\n$preview"
-        )
-      }
-      left = infixEntry.get._2(this, left, token)
+    while (precedence < getPrecedence(peek().typ)) {
+      val op = advance()
+      val (prec, infix) = infixParselets(op.typ)
+      left = infix(left, op)
     }
     left
   }
 
-  def expect(expectedType: String): Token = {
-    val token = advance()
-    if (token.typ != expectedType) {
-      val message =
-        if (token.typ == "EOF")
-          s"Unexpected end of input. Expected token type: $expectedType"
-        else
-          s"Expected token type: $expectedType, but got '${token.lexeme}' (type: ${token.typ})"
-      val preview = ErrorUtils.generateErrorPreview(originalInput, token.loc)
-      throw new ParserError(
-        s"$message at line ${token.loc.line}, column ${token.loc.column}\n$preview"
-      )
-    }
-    token
-  }
-
-  /** Checks if the current token matches the expected type. If so, consumes it
-    * and returns true. Otherwise, returns false and does not consume the token.
-    */
-  def matchAndAdvance(expectedType: String): Boolean = {
-    if (peek().typ == expectedType) {
-      advance()
-      true
-    } else {
-      false
-    }
-  }
-
-  /** Consumes and returns the current token, advancing the parser. If at the
-    * end of input, repeatedly returns the EOF token.
-    */
-  def advance(): Token = {
-    if (current < tokens.length) {
-      val token = tokens(current)
-      current += 1
-      token
-    } else {
-      tokens.last // Should be EOF token
-    }
-  }
-
-  /** Returns the current token without consuming it. If at the end of input,
-    * returns the EOF token.
-    */
-  def peek(): Token = {
-    if (current < tokens.length) {
-      tokens(current)
-    } else {
-      tokens.last // Should be EOF token
-    }
-  }
-
-  /** Returns the most recently consumed token. Throws an error if called before
-    * any token has been advanced.
-    */
-  def previous(): Token = {
-    if (current == 0)
-      throw new IllegalStateException(
-        "No previous token: advance() has not been called yet."
-      )
-    tokens(current - 1)
-  }
-
-  private def getPrecedence(): Int = {
-    val token = peek()
-    // EOF token has 0 precedence, effectively stopping the while loop in parseExpression
-    if (token.typ == "EOF") return 0
-
-    infixParselets.get(token.typ) match {
-      case Some((p, _)) => p
-      case None         => 0 // Tokens not in infixParselets have 0 precedence
-    }
+  private def getPrecedence(typ: String): Int = {
+    infixParselets.get(typ).map(_._1).getOrElse(0)
   }
 }

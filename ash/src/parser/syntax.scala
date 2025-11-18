@@ -1,615 +1,239 @@
 package ash.parser
 
-import ash._ // Your AST definitions
-import scala.collection.mutable.ListBuffer
+import ash._
+
+object Tokens {
+  val ID = "IDENTIFIER"; val INT = "INT_LITERAL"; val STR = "STRING_LITERAL"
+  val LPAREN = "LPAREN"; val RPAREN = "RPAREN"
+  val LBRACE = "LBRACE"; val RBRACE = "RBRACE"
+  val COLON = "COLON"
+  val EOF = "EOF"
+}
 
 object Precedence {
-  val LOWEST = 0
-  val ASSIGNMENT = 1 // =
-  val LOGICAL_OR = 2 // or
-  val LOGICAL_AND = 3 // and
-  val EQUALITY = 4 // == !=
-  val COMPARISON = 5 // < > <= >=
-  val TERM = 6 // + -
-  val FACTOR = 7 // * /
-  val UNARY = 8 // ! -
-  val CALL = 9 // . ()
-  val PRIMARY = 10
+  val LOWEST = 0; val ASSIGN = 1; val LOGIC = 2; val EQ = 4
+  val CMP = 5; val SUM = 6; val PROD = 7; val CALL = 9
 }
 
 class LanguageParser(input: String) {
+  import Tokens._
+  import Precedence._
+
   private val lexer = new Lexer(input)
-    // Comments
-    .token("$SKIP_LINE_COMMENT", "//.*")
-    .token(
-      "$SKIP_BLOCK_COMMENT",
-      "/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/"
-    ) // Non-greedy block comment
-    .token("$SKIP_WHITESPACE", "[ \\t\\r\\n]+")
+    .token("$SKIP_COMMENT", "//.*|/\\*[\\s\\S]*?\\*/")
+    .token("$SKIP_WS", "\\s+")
+    .token("STRUCT", "struct\\b").token("RESOURCE", "resource\\b").token("FN", "fn\\b")
+    .token("LET", "let\\b").token("MUT", "mut\\b").token("RETURN", "return\\b")
+    .token("REF", "ref\\b").token("INOUT", "inout\\b").token("MANAGED", "managed\\b")
+    .token("CLEANUP", "cleanup\\b").token("PRINTLN", "println!")
+    .token("BOOL", "true\\b|false\\b")
+    .token("TYPE_PRIM", "int\\b|bool\\b|unit\\b")
+    .token(ID, "[a-zA-Z_][a-zA-Z0-9_]*")
+    .token(INT, "[0-9]+")
+    .token(STR, "\"[^\"]*\"")
+    .token("ARROW", "->").token("EQ_OP", "==").token("NE", "!=")
+    .token("LE", "<=").token("GE", ">=").token("LT", "<").token("GT", ">")
+    .token("EQUALS", "=").token("PLUS", "\\+").token("MINUS", "-")
+    .token(LPAREN, "\\(").token(RPAREN, "\\)").token(LBRACE, "\\{").token(RBRACE, "\\}")
+    .token("COMMA", ",").token("DOT", "\\.").token("COLON", ":").token("SEMICOLON", ";")
 
-    // Keywords
-    .token("STRUCT", "struct\\b")
-    .token("RESOURCE", "resource\\b")
-    .token("FN", "fn\\b")
-    .token("LET", "let\\b")
-    .token("MUT", "mut\\b")
-    .token("RETURN", "return\\b")
-    .token("REF", "ref\\b")
-    .token("INOUT", "inout\\b")
-    .token("MANAGED", "managed\\b")
-    .token("INT_TYPE", "int\\b")
-    .token("BOOL_TYPE", "bool\\b")
-    .token("UNIT_TYPE", "unit\\b")
-    .token("TRUE", "true\\b")
-    .token("FALSE", "false\\b")
-    .token("CLEANUP", "cleanup\\b")
-    .token("PRINTLN", "println!")
-    // TODO: Add other keywords like if, else, while etc. later
+  private val p = new Parser[Expression](input, lexer)
 
-    // Identifiers
-    .token("IDENTIFIER", "[a-zA-Z_][a-zA-Z0-9_]*")
-
-    // Literals
-    .token("INT_LITERAL", "[0-9]+")
-    .token("STRING_LITERAL", "\"[^\"]*\"")
-
-    // Operators and Punctuation
-    .token("LPAREN", "\\(")
-    .token("RPAREN", "\\)")
-    .token("LBRACE", "\\{")
-    .token("RBRACE", "\\}")
-    // .token("LBRACKET", "\\[") // For arrays if added
-    // .token("RBRACKET", "\\]")
-    .token("COMMA", ",")
-    .token("DOT", "\\.")
-    .token("COLON", ":")
-    .token("SEMICOLON", ";")
-    .token("ARROW", "->")
-    .token("EQUALS", "=")
-    // Arithmetic operators
-    .token("PLUS", "\\+")
-    .token("MINUS", "-")
-    // Comparison operators
-    .token("EQ", "==")
-    .token("NE", "!=")
-    .token("LE", "<=")
-    .token("GE", ">=")
-    .token("LT", "<")
-    .token("GT", ">")
-
-  private val parser = new Parser[Expression](input, lexer)
-
-  // Register prefix parselets
-  parser
-    .prefix("IDENTIFIER", parseIdentifier)
-    .prefix("INT_LITERAL", parseIntLiteral)
-    .prefix("TRUE", parseBooleanLiteral)
-    .prefix("FALSE", parseBooleanLiteral)
-    .prefix("LPAREN", parseGroupedExpression)
-    .prefix("MANAGED", parseManagedExpression)
-    .prefix("PRINTLN", parsePrintlnExpression)
-  // Prefix parselets for struct literals are handled by parseIdentifier
-  // when it sees an IDENTIFIER followed by LBRACE
-
-  // Register infix parselets
-  parser
-    .infix("LPAREN", Precedence.CALL, parseFunctionCall) // e.g. foo()
-    .infix("DOT", Precedence.CALL, parseFieldAccess) // e.g. obj.field
-    // Arithmetic operators
-    .infix("PLUS", Precedence.TERM, parseBinaryOperator)
-    .infix("MINUS", Precedence.TERM, parseBinaryOperator)
-    // Comparison operators
-    .infix("EQ", Precedence.EQUALITY, parseBinaryOperator)
-    .infix("NE", Precedence.EQUALITY, parseBinaryOperator)
-    .infix("LT", Precedence.COMPARISON, parseBinaryOperator)
-    .infix("LE", Precedence.COMPARISON, parseBinaryOperator)
-    .infix("GT", Precedence.COMPARISON, parseBinaryOperator)
-    .infix("GE", Precedence.COMPARISON, parseBinaryOperator)
-
-  // --- Expression Parsing Methods ---
-  private def parseIdentifier(
-      p: Parser[Expression],
-      token: Token
-  ): Expression = {
-    // Check if it's a struct literal instantiation
-    if (p.peek().typ == "LBRACE") {
-      parseStructLiteral(p, token)
-    } else {
-      Variable(token.lexeme, token.loc)
-    }
-  }
-
-  private def parseIntLiteral(
-      p: Parser[Expression],
-      token: Token
-  ): Expression = {
+  p.registerPrefix(INT, t => {
     try {
-      IntLiteral(token.lexeme.toInt, token.loc)
+      IntLiteral(t.lexeme.toInt, t.loc)
     } catch {
-      case e: NumberFormatException =>
-        val preview = ErrorUtils.generateErrorPreview(input, token.loc)
-        throw new ParserError(
-          s"Invalid integer literal: '${token.lexeme}' at line ${token.loc.line}, column ${token.loc.column}\n$preview"
-        )
+      case _: NumberFormatException =>
+        ErrorUtils.error(s"Invalid integer literal: ${t.lexeme}", t.loc, input)
     }
-  }
+  })
 
-  private def parseBooleanLiteral(
-      p: Parser[Expression],
-      token: Token
-  ): Expression = {
-    BoolLiteral(token.lexeme == "true", token.loc)
-  }
+  p.registerPrefix("BOOL", t => BoolLiteral(t.lexeme == "true", t.loc))
+  p.registerPrefix(LPAREN, _ => {
+    val expr = p.parseExpression(LOWEST)
+    p.consume(RPAREN)
+    expr
+  })
 
-  private def parseGroupedExpression(
-      p: Parser[Expression],
-      token: Token
-  ): Expression = {
-    val expr = p.parseExpression(Precedence.LOWEST)
-    p.expect("RPAREN")
-    expr // Location of grouped expr is implicitly covered by its content + parens
-  }
+  p.registerPrefix(ID, t => {
+    if (p.check(LBRACE)) parseStructLiteral(t.lexeme, t.loc)
+    else Variable(t.lexeme, t.loc)
+  })
 
-  private def parseManagedExpression(
-      p: Parser[Expression],
-      token: Token
-  ): Expression = {
-    // token is the "managed" keyword
-    // Next should be an IDENTIFIER followed by LBRACE for struct literal
-    val typeNameToken = p.expect("IDENTIFIER")
-    if (p.peek().typ == "LBRACE") {
-      parseManagedStructLiteral(p, token, typeNameToken)
+  p.registerPrefix("MANAGED", t => {
+    val name = p.consume(ID)
+    if (p.check(LBRACE)) parseStructLiteral(name.lexeme, t.loc, isManaged = true)
+    else ErrorUtils.error("Expected struct literal after 'managed'", name.loc, input)
+  })
+
+  p.registerPrefix("PRINTLN", t => {
+    p.consume(LPAREN)
+    val fmt = p.consume(STR).lexeme.stripPrefix("\"").stripSuffix("\"")
+    val args = if (p.matchToken("COMMA")) {
+      p.parseList(RPAREN, () => p.parseExpression(LOWEST))
     } else {
-      val preview = ErrorUtils.generateErrorPreview(input, typeNameToken.loc)
-      throw new ParserError(
-        s"Expected struct literal after 'managed ${typeNameToken.lexeme}' but got '${p
-            .peek()
-            .lexeme}' at line ${p.peek().loc.line}, column ${p.peek().loc.column}\n$preview"
-      )
+      p.consume(RPAREN)
+      List.empty
     }
+    PrintlnExpression(fmt, args, t.loc)
+  })
+
+  p.registerInfix(LPAREN, CALL, (left, t) => {
+    val args = p.parseList(RPAREN, () => p.parseExpression(LOWEST))
+    FunctionCall(left, args, combineLoc(left.loc, p.prev().loc))
+  })
+
+  p.registerInfix("DOT", CALL, (left, t) => {
+    val field = p.consume(ID)
+    FieldAccess(left, field.lexeme, combineLoc(left.loc, field.loc))
+  })
+
+  val binOps = Map(
+    "PLUS" -> (SUM, BinaryOp.Add), "MINUS" -> (SUM, BinaryOp.Sub),
+    "EQ_OP" -> (EQ, BinaryOp.Eq), "NE" -> (EQ, BinaryOp.Ne),
+    "LT" -> (CMP, BinaryOp.Lt), "LE" -> (CMP, BinaryOp.Le),
+    "GT" -> (CMP, BinaryOp.Gt), "GE" -> (CMP, BinaryOp.Ge)
+  )
+
+  binOps.foreach { case (tok, (prec, op)) =>
+    p.registerInfix(tok, prec, (left, t) => {
+      val right = p.parseExpression(prec)
+      BinaryExpression(left, op, right, combineLoc(left.loc, right.loc))
+    })
   }
 
-  private def parsePrintlnExpression(
-      p: Parser[Expression],
-      token: Token
-  ): Expression = {
-    // token is the "println!" keyword
-    p.expect("LPAREN")
-    val formatStringToken = p.expect("STRING_LITERAL")
-    // Remove quotes from string literal
-    val formatString = formatStringToken.lexeme.substring(1, formatStringToken.lexeme.length - 1)
-    
-    val args = ListBuffer.empty[Expression]
-    while (p.matchAndAdvance("COMMA")) {
-      args += p.parseExpression(Precedence.LOWEST)
-    }
-    val rParenToken = p.expect("RPAREN")
-    val loc = SourceLocation(
-      token.loc.line,
-      token.loc.column,
-      token.loc.startPosition,
-      rParenToken.loc.endPosition
-    )
-    PrintlnExpression(formatString, args.toList, loc)
+  private def combineLoc(start: SourceLocation, end: SourceLocation) =
+    SourceLocation(start.line, start.column, start.startPosition, end.endPosition)
+
+  private def parseStructLiteral(name: String, startLoc: SourceLocation, isManaged: Boolean = false): Expression = {
+    p.consume(LBRACE)
+    val fields = p.parseList(RBRACE, () => {
+      val key = p.consume(ID).lexeme
+      p.consume(COLON)
+      (key, p.parseExpression(LOWEST))
+    })
+    val loc = combineLoc(startLoc, p.prev().loc)
+    if (isManaged) ManagedStructLiteral(name, fields, loc)
+    else StructLiteral(name, fields, loc)
   }
 
-  private def parseStructLiteral(
-      p: Parser[Expression],
-      typeNameToken: Token
-  ): Expression = {
-    p.expect("LBRACE") // Consume the opening brace
-    val fields = ListBuffer.empty[(String, Expression)]
-    val firstTokenLoc = typeNameToken.loc
+  private def parseType(): Type = {
+    if (p.matchToken("MANAGED")) {
+      val start = p.prev().loc
+      val inner = parseBaseType()
+      ManagedType(inner, Some(combineLoc(start, inner.loc.get)))
+    } else parseBaseType()
+  }
 
-    if (p.peek().typ != "RBRACE") {
-      val fieldNameToken = p.expect("IDENTIFIER")
-      p.expect("COLON")
-      val value = p.parseExpression(Precedence.LOWEST)
-      fields += ((fieldNameToken.lexeme, value))
-      while (p.matchAndAdvance("COMMA") && p.peek().typ != "RBRACE") {
-        val fieldNameToken = p.expect("IDENTIFIER")
-        p.expect("COLON")
-        val value = p.parseExpression(Precedence.LOWEST)
-        fields += ((fieldNameToken.lexeme, value))
+  private def parseBaseType(): Type = {
+    val t = p.advance()
+    t.typ match {
+      case "TYPE_PRIM" => t.lexeme match {
+        case "int" => IntType(Some(t.loc))
+        case "bool" => BoolType(Some(t.loc))
+        case "unit" => UnitType(Some(t.loc))
       }
-    }
-    val rBraceToken = p.expect("RBRACE")
-    val loc = SourceLocation(
-      firstTokenLoc.line,
-      firstTokenLoc.column,
-      firstTokenLoc.startPosition,
-      rBraceToken.loc.endPosition
-    )
-    StructLiteral(typeNameToken.lexeme, fields.toList, loc)
-  }
-
-  private def parseManagedStructLiteral(
-      p: Parser[Expression],
-      managedToken: Token,
-      typeNameToken: Token
-  ): Expression = {
-    p.expect("LBRACE") // Consume the opening brace
-    val fields = ListBuffer.empty[(String, Expression)]
-    val firstTokenLoc = managedToken.loc
-
-    if (p.peek().typ != "RBRACE") {
-      val fieldNameToken = p.expect("IDENTIFIER")
-      p.expect("COLON")
-      val value = p.parseExpression(Precedence.LOWEST)
-      fields += ((fieldNameToken.lexeme, value))
-      while (p.matchAndAdvance("COMMA") && p.peek().typ != "RBRACE") {
-        val fieldNameToken = p.expect("IDENTIFIER")
-        p.expect("COLON")
-        val value = p.parseExpression(Precedence.LOWEST)
-        fields += ((fieldNameToken.lexeme, value))
-      }
-    }
-    val rBraceToken = p.expect("RBRACE")
-    val loc = SourceLocation(
-      firstTokenLoc.line,
-      firstTokenLoc.column,
-      firstTokenLoc.startPosition,
-      rBraceToken.loc.endPosition
-    )
-    ManagedStructLiteral(typeNameToken.lexeme, fields.toList, loc)
-  }
-
-  private def parseFunctionCall(
-      p: Parser[Expression],
-      left: Expression,
-      token: Token
-  ): Expression = {
-    val args = ListBuffer.empty[Expression]
-    // 'left' is the function name (or expression evaluating to a function)
-    // 'token' is LPAREN
-
-    if (p.peek().typ != "RPAREN") {
-      args += p.parseExpression(Precedence.LOWEST)
-      while (p.matchAndAdvance("COMMA")) {
-        args += p.parseExpression(Precedence.LOWEST)
-      }
-    }
-    val rParenToken = p.expect("RPAREN")
-    val endLoc = rParenToken.loc.endPosition
-    val callLoc = SourceLocation(
-      left.loc.line,
-      left.loc.column,
-      left.loc.startPosition,
-      endLoc
-    )
-    FunctionCall(left, args.toList, callLoc)
-  }
-
-  private def parseFieldAccess(
-      p: Parser[Expression],
-      left: Expression,
-      token: Token
-  ): Expression = {
-    // 'left' is the object
-    // 'token' is DOT
-    val fieldNameToken = p.expect("IDENTIFIER")
-    val loc = SourceLocation(
-      left.loc.line,
-      left.loc.column,
-      left.loc.startPosition,
-      fieldNameToken.loc.endPosition
-    )
-    FieldAccess(left, fieldNameToken.lexeme, loc)
-  }
-
-  private def parseBinaryOperator(
-      p: Parser[Expression],
-      left: Expression,
-      token: Token
-  ): Expression = {
-    val op = token.typ match {
-      case "PLUS"  => BinaryOp.Add
-      case "MINUS" => BinaryOp.Sub
-      case "EQ"    => BinaryOp.Eq
-      case "NE"    => BinaryOp.Ne
-      case "LT"    => BinaryOp.Lt
-      case "LE"    => BinaryOp.Le
-      case "GT"    => BinaryOp.Gt
-      case "GE"    => BinaryOp.Ge
-      case _ => 
-        val preview = ErrorUtils.generateErrorPreview(input, token.loc)
-        throw new ParserError(
-          s"Unknown binary operator: '${token.lexeme}' at line ${token.loc.line}, column ${token.loc.column}\n$preview"
-        )
-    }
-    
-    val precedence = token.typ match {
-      case "PLUS" | "MINUS" => Precedence.TERM
-      case "EQ" | "NE" => Precedence.EQUALITY
-      case "LT" | "LE" | "GT" | "GE" => Precedence.COMPARISON
-      case _ => Precedence.LOWEST
-    }
-    
-    val right = p.parseExpression(precedence)
-    val loc = SourceLocation(
-      left.loc.line,
-      left.loc.column,
-      left.loc.startPosition,
-      right.loc.endPosition
-    )
-    BinaryExpression(left, op, right, loc)
-  }
-
-  // --- Type Parsing ---
-  private def parseType(p: Parser[Expression]): Type = {
-    if (p.peek().typ == "MANAGED") {
-      val managedToken = p.advance() // consume 'managed'
-      val innerType = parseBaseType(p)
-      val endLoc = innerType.loc.getOrElse(p.previous().loc)
-      val managedLoc = SourceLocation(
-        managedToken.loc.line,
-        managedToken.loc.column,
-        managedToken.loc.startPosition,
-        endLoc.endPosition
-      )
-      ManagedType(innerType, Some(managedLoc))
-    } else {
-      parseBaseType(p)
+      case ID => StructNameType(t.lexeme, Some(t.loc))
+      case _ => ErrorUtils.error(s"Expected type, got ${t.lexeme}", t.loc, input)
     }
   }
 
-  private def parseBaseType(p: Parser[Expression]): Type = {
-    val typeToken = p.advance()
-    typeToken.typ match {
-      case "INT_TYPE"   => IntType(Some(typeToken.loc))
-      case "BOOL_TYPE"  => BoolType(Some(typeToken.loc))
-      case "UNIT_TYPE"  => UnitType(Some(typeToken.loc))
-      case "IDENTIFIER" => StructNameType(typeToken.lexeme, Some(typeToken.loc))
-      case _ =>
-        val preview = ErrorUtils.generateErrorPreview(input, typeToken.loc)
-        throw new ParserError(
-          s"Expected a base type name (int, bool, unit, or Identifier) but got '${typeToken.lexeme}' at line ${typeToken.loc.line}, column ${typeToken.loc.column}\n$preview"
-        )
-    }
-  }
+  private def parseStatement(): Statement = p.peek().typ match {
+    case "LET" =>
+      val start = p.consume("LET").loc
+      val isMut = p.matchToken("MUT")
+      val name = p.consume(ID).lexeme
+      val typeAnn = if (p.matchToken(COLON)) Some(parseType()) else None
+      p.consume("EQUALS")
+      val expr = p.parseExpression(LOWEST)
+      p.consume("SEMICOLON")
+      LetStatement(name, isMut, typeAnn, expr, start)
 
-  // --- Statement Parsing ---
-  private def parseStatement(p: Parser[Expression]): Statement = {
-    val currentToken = p.peek()
-    currentToken.typ match {
-      case "LET"    => parseLetStatement(p)
-      case "RETURN" => parseReturnStatement(p)
-      case "LBRACE" => parseBlockStatement(p)
-      // Attempt to parse an expression statement (could be assignment or function call)
-      case _ =>
-        val expr = p.parseExpression(Precedence.LOWEST)
-        // Check if it's an assignment
-        if (p.peek().typ == "EQUALS") {
-          parseAssignmentStatement(p, expr) // expr is the target
-        } else {
-          p.expect("SEMICOLON")
-          ExpressionStatement(expr, expr.loc) // loc from the expression itself
-        }
-    }
-  }
+    case "RETURN" =>
+      val start = p.consume("RETURN").loc
+      val expr = if (!p.check("SEMICOLON")) Some(p.parseExpression(LOWEST)) else None
+      p.consume("SEMICOLON")
+      ReturnStatement(expr, start)
 
-  private def parseLetStatement(p: Parser[Expression]): LetStatement = {
-    val letToken = p.expect("LET")
-    val isMutable = p.matchAndAdvance("MUT")
-    val varNameToken = p.expect("IDENTIFIER")
-    val typeAnnotation = if (p.matchAndAdvance("COLON")) {
-      Some(parseType(p))
-    } else {
-      None
-    }
-    p.expect("EQUALS")
-    val initExpr = p.parseExpression(Precedence.LOWEST)
-    p.expect("SEMICOLON")
-    LetStatement(varNameToken.lexeme, isMutable, typeAnnotation, initExpr, letToken.loc)
-  }
+    case LBRACE => parseBlock()
 
-  private def parseReturnStatement(p: Parser[Expression]): ReturnStatement = {
-    val returnToken = p.expect("RETURN")
-    val expr = if (p.peek().typ != "SEMICOLON") {
-      Some(p.parseExpression(Precedence.LOWEST))
-    } else {
-      None
-    }
-    p.expect("SEMICOLON")
-    ReturnStatement(expr, returnToken.loc)
-  }
-
-  private def parseAssignmentStatement(
-      p: Parser[Expression],
-      target: Expression
-  ): AssignmentStatement = {
-    val equalsToken = p.expect("EQUALS") // Consumes the '='
-    val valueExpr = p.parseExpression(Precedence.LOWEST)
-    p.expect("SEMICOLON")
-    // The location should span from the start of the target to the end of the semicolon
-    val endLoc = p.previous().loc // Semicolon token
-    val assignLoc = SourceLocation(
-      target.loc.line,
-      target.loc.column,
-      target.loc.startPosition,
-      endLoc.endPosition
-    )
-    AssignmentStatement(target, valueExpr, assignLoc)
-  }
-
-  private def parseBlockStatement(p: Parser[Expression]): BlockStatement = {
-    val lBraceToken = p.expect("LBRACE")
-    val statements = ListBuffer.empty[Statement]
-    while (p.peek().typ != "RBRACE" && p.peek().typ != "EOF") {
-      statements += parseStatement(p)
-    }
-    val rBraceToken = p.expect("RBRACE")
-    val loc = SourceLocation(
-      lBraceToken.loc.line,
-      lBraceToken.loc.column,
-      lBraceToken.loc.startPosition,
-      rBraceToken.loc.endPosition
-    )
-    BlockStatement(statements.toList, loc)
-  }
-
-  // --- Top-Level Parsing (Program, Structs, Resources, Functions) ---
-  private def parseStructDef(p: Parser[Expression]): StructDef = {
-    val structToken = p.expect("STRUCT")
-    val nameToken = p.expect("IDENTIFIER")
-    p.expect("LBRACE")
-    val fields = ListBuffer.empty[(String, Type)]
-    while (p.peek().typ != "RBRACE" && p.peek().typ != "EOF") {
-      val fieldNameToken = p.expect("IDENTIFIER")
-      p.expect("COLON")
-      val fieldType = parseType(p)
-      fields += ((fieldNameToken.lexeme, fieldType))
-      if (p.peek().typ == "RBRACE") {
-        // allow trailing comma if we wanted: p.matchAndAdvance("COMMA")
+    case _ =>
+      val expr = p.parseExpression(LOWEST)
+      if (p.matchToken("EQUALS")) {
+        val value = p.parseExpression(LOWEST)
+        p.consume("SEMICOLON")
+        AssignmentStatement(expr, value, combineLoc(expr.loc, p.prev().loc))
       } else {
-        p.expect("COMMA") // Require comma if not the last field before RBRACE
+        p.consume("SEMICOLON")
+        ExpressionStatement(expr, expr.loc)
       }
-    }
-    val rBraceToken = p.expect("RBRACE")
-    val loc = SourceLocation(
-      structToken.loc.line,
-      structToken.loc.column,
-      structToken.loc.startPosition,
-      rBraceToken.loc.endPosition
-    )
-    StructDef(nameToken.lexeme, fields.toList, loc)
   }
 
-  private def parseResourceDef(p: Parser[Expression]): ResourceDef = {
-    val resourceToken = p.expect("RESOURCE")
-    val nameToken = p.expect("IDENTIFIER")
-    p.expect("LBRACE")
-    val fields = ListBuffer.empty[(String, Type)]
-    
-    // Parse fields
-    while (p.peek().typ != "RBRACE" && p.peek().typ != "EOF" && p.peek().typ != "CLEANUP") {
-      val fieldNameToken = p.expect("IDENTIFIER")
-      p.expect("COLON")
-      val fieldType = parseType(p)
-      fields += ((fieldNameToken.lexeme, fieldType))
-      if (p.peek().typ == "RBRACE" || p.peek().typ == "CLEANUP") {
-        // allow trailing comma if we wanted: p.matchAndAdvance("COMMA")
-      } else {
-        p.expect("COMMA") // Require comma if not the last field before RBRACE or CLEANUP
-      }
+  private def parseBlock(): BlockStatement = {
+    val start = p.consume(LBRACE).loc
+    val stmts = collection.mutable.Buffer[Statement]()
+    while (!p.check(RBRACE) && !p.check(EOF)) {
+      stmts += parseStatement()
     }
-    
-    // Parse optional cleanup block
-    val cleanup = if (p.peek().typ == "CLEANUP") {
-      p.expect("CLEANUP")
-      Some(parseBlockStatement(p))
-    } else {
-      None
-    }
-    
-    val rBraceToken = p.expect("RBRACE")
-    val loc = SourceLocation(
-      resourceToken.loc.line,
-      resourceToken.loc.column,
-      resourceToken.loc.startPosition,
-      rBraceToken.loc.endPosition
-    )
-    ResourceDef(nameToken.lexeme, fields.toList, cleanup, loc)
-  }
-
-  private def parseParam(p: Parser[Expression]): Param = {
-    val nameToken = p.expect("IDENTIFIER")
-    p.expect("COLON")
-
-    val modePeekToken =
-      p.peek() // Peek at what might be 'mut', 'ref', 'inout', or the base type
-
-    val mode = modePeekToken.typ match {
-      case "MUT" =>
-        p.advance() // Consume 'mut'
-        ParamMode.Move(isMutable = true)
-      case "REF" =>
-        p.advance() // Consume 'ref'
-        ParamMode.Ref
-      case "INOUT" =>
-        p.advance() // Consume 'inout'
-        ParamMode.Inout
-      case _ =>
-        ParamMode.Move(isMutable = false) // No mode keyword, next token is the base type
-    }
-
-    val baseTypeAst = parseType(
-      p
-    ) // Parse type (potentially with managed prefix)
-
-    // Calculate the overall location for the Param AST node
-    // It should span from the nameToken to the end of the baseTypeAst
-    val paramStartLoc = nameToken.loc
-    val paramEndLoc = baseTypeAst.loc.getOrElse(
-      p.previous().loc
-    ) // Use baseType's loc, or last consumed token if baseType has no loc
-
-    val overallParamLoc = SourceLocation(
-      paramStartLoc.line,
-      paramStartLoc.column,
-      paramStartLoc.startPosition,
-      paramEndLoc.endPosition
-    )
-
-    Param(nameToken.lexeme, baseTypeAst, mode, overallParamLoc)
-  }
-
-  private def parseFuncDef(p: Parser[Expression]): FuncDef = {
-    val fnToken = p.expect("FN")
-    val nameToken = p.expect("IDENTIFIER")
-    p.expect("LPAREN")
-    val params = ListBuffer.empty[Param]
-    if (p.peek().typ != "RPAREN") {
-      params += parseParam(p)
-      while (p.matchAndAdvance("COMMA")) {
-        params += parseParam(p)
-      }
-    }
-    p.expect("RPAREN")
-    val returnType = if (p.matchAndAdvance("ARROW")) {
-      parseType(p)
-    } else {
-      UnitType(None) // Default return type is unit, loc can be None or inferred
-    }
-    val body = parseBlockStatement(p)
-    val loc = SourceLocation(
-      fnToken.loc.line,
-      fnToken.loc.column,
-      fnToken.loc.startPosition,
-      body.loc.endPosition
-    )
-    FuncDef(nameToken.lexeme, params.toList, returnType, body, loc)
+    val end = p.consume(RBRACE).loc
+    BlockStatement(stmts.toList, combineLoc(start, end))
   }
 
   def parseProgram(): Program = {
-    val structs = ListBuffer.empty[StructDef]
-    val resources = ListBuffer.empty[ResourceDef]
-    val functions = ListBuffer.empty[FuncDef]
-    val startLoc = parser.peek().loc // Location of the first token
+    val structs = collection.mutable.Buffer[StructDef]()
+    val resources = collection.mutable.Buffer[ResourceDef]()
+    val funcs = collection.mutable.Buffer[FuncDef]()
+    val start = p.peek().loc
 
-    while (parser.peek().typ != "EOF") {
-      parser.peek().typ match {
-        case "STRUCT"   => structs += parseStructDef(parser)
-        case "RESOURCE" => resources += parseResourceDef(parser)
-        case "FN"       => functions += parseFuncDef(parser)
-        case other =>
-          val token = parser.peek()
-          val preview = ErrorUtils.generateErrorPreview(input, token.loc)
-          throw new ParserError(
-            s"Expected 'struct', 'resource', or 'fn' definition at top level, but got '${token.lexeme}' (type: ${token.typ}) at line ${token.loc.line}, column ${token.loc.column}\n$preview"
-          )
+    while (!p.check(EOF)) {
+      p.peek().typ match {
+        case "STRUCT" =>
+          val start = p.consume("STRUCT").loc
+          val name = p.consume(ID).lexeme
+          p.consume(LBRACE)
+          val fields = p.parseList(RBRACE, () => parseFieldDef())
+          structs += StructDef(name, fields, combineLoc(start, p.prev().loc))
+
+        case "RESOURCE" =>
+          val start = p.consume("RESOURCE").loc
+          val name = p.consume(ID).lexeme
+          p.consume(LBRACE)
+          val fields = collection.mutable.Buffer[(String, Type)]()
+          while (!p.check(RBRACE) && !p.check("CLEANUP") && !p.check(EOF)) {
+            fields += parseFieldDef()
+            if (!p.check(RBRACE) && !p.check("CLEANUP")) p.consume("COMMA")
+          }
+          val cleanup = if (p.matchToken("CLEANUP")) Some(parseBlock()) else None
+          val end = p.consume(RBRACE).loc
+          resources += ResourceDef(name, fields.toList, cleanup, combineLoc(start, end))
+
+        case "FN" =>
+          val start = p.consume("FN").loc
+          val name = p.consume(ID).lexeme
+          p.consume(LPAREN)
+          val params = p.parseList(RPAREN, () => {
+             val pname = p.consume(ID)
+             p.consume(COLON)
+             val mode = if (p.matchToken("MUT")) ParamMode.Move(true)
+                        else if (p.matchToken("REF")) ParamMode.Ref
+                        else if (p.matchToken("INOUT")) ParamMode.Inout
+                        else ParamMode.Move(false)
+             val ptype = parseType()
+             Param(pname.lexeme, ptype, mode, combineLoc(pname.loc, ptype.loc.getOrElse(p.prev().loc)))
+          })
+          val retType = if (p.matchToken("ARROW")) parseType() else UnitType(None)
+          val body = parseBlock()
+          funcs += FuncDef(name, params, retType, body, combineLoc(start, body.loc))
+
+        case _ => ErrorUtils.error(s"Unexpected token: ${p.peek().lexeme}", p.peek().loc, input)
       }
     }
-    val endLoc =
-      parser
-        .previous()
-        .loc // Location of the token before EOF (or EOF itself if empty)
-    val programLoc = SourceLocation(
-      startLoc.line,
-      startLoc.column,
-      startLoc.startPosition,
-      endLoc.endPosition
-    )
-    Program(structs.toList, resources.toList, functions.toList, programLoc)
+    Program(structs.toList, resources.toList, funcs.toList, combineLoc(start, p.prev().loc))
+  }
+
+  private def parseFieldDef(): (String, Type) = {
+    val name = p.consume(ID).lexeme
+    p.consume(COLON)
+    (name, parseType())
   }
 }
