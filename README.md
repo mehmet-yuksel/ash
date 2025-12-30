@@ -9,7 +9,6 @@ The language is: use ownership rules by default but use GC for any specific obje
 - [Prerequisites](#prerequisites)
 - [Usage: Compiling](#usage-compiling)
 - [Building the Compiler](#building-the-compiler)
-- [Dependencies](#dependencies)
 - [Language Reference](#language-reference)
   - [Ownership and Memory Management](#ownership-and-memory-management)
   - [Mutability](#mutability)
