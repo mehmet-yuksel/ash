@@ -7,7 +7,7 @@ import java.nio.file.{Files, Paths}
 import scala.util.{Try, Success, Failure}
 import ash.parser.LanguageParser
 import ash.typechecker.Typechecker
-import ash.codegen.CppCodeGenerator
+import ash.codegen.CppBackend
 
 object IntegrationTests extends TestSuite {
 
@@ -381,7 +381,7 @@ object Compiler {
       val typechecker = new Typechecker(programAst, source)
       val typedProgram = typechecker.check()
 
-      val codegen = new CppCodeGenerator(typedProgram)
+      val codegen = new CppBackend(typedProgram)
       return Right(codegen.generate())
     } catch {
       case e: Exception =>

@@ -9,7 +9,7 @@ import parser.{
 }
 import ash.typechecker.Typechecker
 import ash.typechecker.TypeError
-import ash.codegen.CppCodeGenerator
+import ash.codegen.CppBackend
 import java.nio.file.{Files, Paths}
 
 object Main {
@@ -36,7 +36,7 @@ object Main {
       val typechecker = new Typechecker(programAst, sourceCode)
       val typedProgram = typechecker.check()
 
-      val codegen = new CppCodeGenerator(typedProgram)
+      val codegen = new CppBackend(typedProgram)
       val cppCode = codegen.generate()
       val outputPath = Paths.get(outputFile)
       Files.write(outputPath, cppCode.getBytes("UTF-8"))

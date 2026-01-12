@@ -4,7 +4,7 @@ import ash.parser._
 import ash.typechecker.typed._
 import scala.collection.mutable
 
-class CodeWriter {
+class CodeBuilder {
   private val buffer = new mutable.StringBuilder()
   private var indentLevel = 0
   private val indentString = "    " // 4 spaces
@@ -119,11 +119,11 @@ enum CommentStyle {
   case SingleLine, Block
 }
 
-class CppCodeGenerator(program: TypedProgram) {
+class CppBackend(program: TypedProgram) {
 
-  private val headers = new CodeWriter()
-  private val forward = new CodeWriter()
-  private val impl = new CodeWriter()
+  private val headers = new CodeBuilder()
+  private val forward = new CodeBuilder()
+  private val impl = new CodeBuilder()
 
   // Maps for easy lookup
   private val structDefs: Map[String, StructDef] =
@@ -290,7 +290,7 @@ class CppCodeGenerator(program: TypedProgram) {
     }
   }
 
-  private def generateResourceCleanup(cleanup: TypedStatement, writer: CodeWriter): Unit = {
+  private def generateResourceCleanup(cleanup: TypedStatement, writer: CodeBuilder): Unit = {
     cleanup match {
       case TypedBlockStatement(statements, _) =>
         statements.foreach(stmt => generateStatement(stmt, writer))
@@ -329,7 +329,7 @@ class CppCodeGenerator(program: TypedProgram) {
     }.mkString(", ")
   }
 
-  private def generateStatement(stmt: TypedStatement, writer: CodeWriter): Unit = {
+  private def generateStatement(stmt: TypedStatement, writer: CodeBuilder): Unit = {
     stmt match {
       case TypedBlockStatement(statements, _) =>
         writer.inBlock() {
